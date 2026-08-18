@@ -120,8 +120,8 @@ source(대량 원본, 스캔 대상): {source_note}
 
 # ---- configure --------------------------------------------------------------
 
-CONFIG_KEYS = ("dict", "ocr-dict", "lang", "backend", "min-conf", "dict-min",
-               "source", "font")
+CONFIG_KEYS = ("dict", "ocr-dict", "lang", "backend", "recognizer",
+               "min-conf", "dict-min", "source", "font")
 
 
 def cmd_configure(args) -> int:
@@ -134,7 +134,8 @@ def cmd_configure(args) -> int:
         print(f"  data     = {project.data_root}")
         print(f"  erased   = {project.base_root}")
         print(f"  injected = {project.output_root}")
-        print(f"  lang     = {project.ocr_lang} / backend = {project.ocr_backend}")
+        print(f"  lang     = {project.ocr_lang} / backend = {project.ocr_backend}"
+              f" / recognizer = {project.ocr_recognizer or '(없음)'}")
         print(f"  ocr_dict = {project.ocr_dict or '(없음)'}")
         data = ledgermod.load(project)
         terms = data.get("terms") or []
@@ -171,8 +172,9 @@ def cmd_configure(args) -> int:
     if key in ("ocr-dict", "source"):
         value = posix(value)
     config_key = {"ocr-dict": "ocr_dict", "lang": "ocr_lang",
-                  "backend": "ocr_backend", "min-conf": "ocr_min_conf",
-                  "dict-min": "ocr_dict_min", "source": "source"}[key]
+                  "backend": "ocr_backend", "recognizer": "ocr_recognizer",
+                  "min-conf": "ocr_min_conf", "dict-min": "ocr_dict_min",
+                  "source": "source"}[key]
 
     def mutate(raw):
         if config_key == "ocr_dict":
@@ -552,6 +554,22 @@ def cmd_extract(args) -> int:
              for rel, _, _, _ in plan]
     print(f"OCR {len(files)}장 ({project.ocr_lang}, {backend}) ...")
     _, results = ocrmod.run_ocr(project, files, backend=backend)
+
+    # 인식 보강 — 탐지된 줄의 글자 판독을 일본어 특화 모델로 재수행.
+    # text-only 인데 탐지가 전멸한 파일은 이미지 전체 판독으로 구조한다.
+    if project.ocr_recognizer == "manga-ocr":
+        refined = ocrmod.refine_results(project.original_root, results)
+        rescued = 0
+        entries_by_rel = {e["file"]: e for e in results}
+        for relative, _, _, mode in plan:
+            entry = entries_by_rel.get(relative)
+            if mode == "text-only" and entry is not None and not entry["lines"]:
+                line = ocrmod.recognize_whole(project.original_root, relative)
+                if line:
+                    entry["lines"].append(line)
+                    rescued += 1
+        print(f"인식 보강(manga-ocr): {refined}줄 재판독, "
+              f"탐지 전멸 구조 {rescued}장")
 
     vocab = ocrmod.load_ocr_dict(project)
     if vocab:

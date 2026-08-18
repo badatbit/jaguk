@@ -18,6 +18,8 @@ inpaint = ["opencv-python-headless>=4.8"]
 # 리눅스/맥 OCR 백엔드 — tesseract 는 바이너리+언어데이터 별도 설치 필요
 tesseract = ["pytesseract>=0.3.10"]
 easyocr = ["easyocr>=1.7"]
+# 인식 보강 — 탐지된 줄의 글자 판독을 일본어 특화 모델로 재수행
+mangaocr = ["manga-ocr>=0.1.14"]
 
 [project.scripts]
 typelet = "typelet.cli:main"

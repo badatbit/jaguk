@@ -366,6 +366,90 @@ def run_ocr(project: Project, files: list[Path], lang: str | None = None,
     raise ValueError(f"모르는 OCR 백엔드: {backend!r}")
 
 
+# ---- 인식 보강 (manga-ocr) ----------------------------------------------------
+# 탐지(상자)는 기존 백엔드가 하고, 각 줄의 **글자 판독만** 일본어 특화 모델로
+# 다시 한다. 실측(2026-08-19): WinRT 오독(|士幌高原·7ルペ七一ド終1)과 전멸
+# (鹿追·江差·岩間温泉)을 타이트 크롭 + 2x 확대 + 회색 배경 레시피로 전부
+# 정답 처리. 넓은 빈 캔버스를 그대로 주면 환각(これからは、)이 나온다.
+
+_MANGA_OCR = None
+_RECOGNIZE_BG = (110, 110, 110)     # 회색 — 흰 글자·어두운 글자 다 보인다
+_RECOGNIZE_MIN_H = 48               # 이보다 작으면 정수배 확대
+
+
+def _mangaocr():
+    global _MANGA_OCR
+    if _MANGA_OCR is None:
+        try:
+            from manga_ocr import MangaOcr
+        except ImportError:
+            raise RuntimeError(
+                "manga-ocr 가 없습니다 — `pip install type-lettering[mangaocr]`"
+            )
+        _MANGA_OCR = MangaOcr()
+    return _MANGA_OCR
+
+
+def _ink_bbox(image, pad: int = 6):
+    """RGBA 잉크(알파>40) bbox + 여백. 잉크가 없으면 None."""
+    import numpy as np
+    alpha = np.asarray(image)[:, :, 3]
+    ys, xs = np.where(alpha > 40)
+    if not len(xs):
+        return None
+    return (max(0, int(xs.min()) - pad), max(0, int(ys.min()) - pad),
+            min(image.width, int(xs.max()) + 1 + pad),
+            min(image.height, int(ys.max()) + 1 + pad))
+
+
+def _recognize_crop(crop) -> str:
+    """RGBA 크롭 → manga-ocr 텍스트. 작으면 확대, 회색 바탕에 합성."""
+    from PIL import Image
+    if crop.height < _RECOGNIZE_MIN_H:
+        scale = -(-_RECOGNIZE_MIN_H // max(1, crop.height))   # ceil
+        scale = min(scale, 4)
+        crop = crop.resize((crop.width * scale, crop.height * scale),
+                           Image.LANCZOS)
+    return _mangaocr()(_flatten(crop, _RECOGNIZE_BG)).strip()
+
+
+def refine_results(root: Path, results: list[dict]) -> int:
+    """탐지된 각 줄을 원본에서 잘라 manga-ocr 로 재판독 — 상자는 유지하고
+    텍스트만 바꾼다. 바뀐 줄 수를 돌려준다 (원값은 line["ocr"] 에 보존)."""
+    from PIL import Image
+    changed = 0
+    pad = 4
+    for entry in results:
+        if not entry["lines"]:
+            continue
+        image = Image.open(root / Path(*entry["file"].split("/"))).convert("RGBA")
+        for line in entry["lines"]:
+            box = (max(0, line["x"] - pad), max(0, line["y"] - pad),
+                   min(image.width, line["x"] + line["w"] + pad),
+                   min(image.height, line["y"] + line["h"] + pad))
+            text = _recognize_crop(image.crop(box))
+            if text and text != line["text"]:
+                line.setdefault("ocr", line["text"])
+                line["text"] = text
+                changed += 1
+    return changed
+
+
+def recognize_whole(root: Path, relative: str) -> dict | None:
+    """이미지 전체(잉크 bbox)를 한 줄로 판독 — 탐지가 전멸한 text-only
+    파일 구조용. {text,x,y,w,h} 또는 None."""
+    from PIL import Image
+    image = Image.open(root / Path(*relative.split("/"))).convert("RGBA")
+    bbox = _ink_bbox(image)
+    if bbox is None:
+        return None
+    text = _recognize_crop(image.crop(bbox))
+    if not text:
+        return None
+    return {"text": text, "x": bbox[0], "y": bbox[1],
+            "w": bbox[2] - bbox[0], "h": bbox[3] - bbox[1]}
+
+
 def load_ocr_dict(project: Project) -> list[str]:
     """OCR 교정 사전 — 알려진 원문 어휘 목록.
 
@@ -532,6 +616,10 @@ def run(project: Project, only: str = "", seed: bool = False,
     backend = pick_backend(backend or project.ocr_backend)
     print(f"OCR {len(files)}장 ({lang or project.ocr_lang}, {backend}) ...")
     _, results = run_ocr(project, files, lang, backend)
+
+    if project.ocr_recognizer == "manga-ocr":
+        refined = refine_results(project.original_root, results)
+        print(f"인식 보강(manga-ocr): {refined}줄 재판독")
 
     vocab = load_ocr_dict(project)
     if vocab:

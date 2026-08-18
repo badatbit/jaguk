@@ -31,6 +31,8 @@
                     유사도로 사전 항목에 스냅해 오독(火鍵日→火曜日)을 고친다.
                     .txt(한 줄 하나) 또는 용어표 형식(json/tsv — 원문 키만 씀)
     ocr_dict_min    교정 유사도 하한 (0~1, 기본 0.7) — 미만이면 원문 유지
+    ocr_recognizer  "manga-ocr" 면 탐지된 각 줄의 글자 판독을 일본어 특화
+                    모델로 다시 한다 (상자는 유지) — 오독·환각이 크게 준다
     fonts           {"패밀리/weight": "글꼴파일"} — 파일은 font_root 기준
                     상대 또는 절대 경로
 """
@@ -57,6 +59,7 @@ DEFAULTS = {
     "ocr_min_conf": 0.2,
     "ocr_dict": [],
     "ocr_dict_min": 0.7,
+    "ocr_recognizer": "",
     "fonts": {},
 }
 
@@ -77,6 +80,7 @@ class Project:
     ocr_min_conf: float
     ocr_dict: list[str]
     ocr_dict_min: float
+    ocr_recognizer: str
     fonts: dict[str, str]
 
 
@@ -142,6 +146,7 @@ def load_path(config_path: Path) -> Project:
         ocr_min_conf=float(raw["ocr_min_conf"]),
         ocr_dict=list(raw["ocr_dict"]),
         ocr_dict_min=float(raw["ocr_dict_min"]),
+        ocr_recognizer=raw["ocr_recognizer"],
         fonts=dict(raw["fonts"]),
     )
 
