@@ -40,6 +40,11 @@ from .config import DEFAULTS, Project
 CONFIG_NAME = "jaguk.json"
 
 
+def posix(value: str) -> str:
+    """JSON 에 기록하는 경로는 전부 POSIX 스타일(/) — WSL/리눅스와 공유 가능."""
+    return value.replace("\\", "/")
+
+
 def load_project(config_arg: str) -> Project:
     path = Path(config_arg or CONFIG_NAME)
     if not path.exists():
@@ -72,12 +77,12 @@ def cmd_init(args) -> int:
     directory.mkdir(parents=True, exist_ok=True)
     raw = dict(DEFAULTS)
     raw.update({
-        "source": args.source,
-        "originals": args.originals,
-        "texts": args.texts,
-        "erased": args.erased,
-        "injected": args.injected,
-        "ledger": f"{args.texts}/lettering.json",
+        "source": posix(args.source),
+        "originals": posix(args.originals),
+        "texts": posix(args.texts),
+        "erased": posix(args.erased),
+        "injected": posix(args.injected),
+        "ledger": f"{posix(args.texts)}/lettering.json",
         "ocr_lang": args.lang,
         "ocr_backend": args.backend,
     })
@@ -150,12 +155,15 @@ def cmd_configure(args) -> int:
     if key == "font":
         if len(values) != 2:
             sys.exit('사용: jaguk configure font "패밀리/weight" <파일>')
-        save_config(project, lambda raw: raw["fonts"].__setitem__(values[0], values[1]))
-        print(f"글꼴 등록: {values[0]} -> {values[1]}")
+        font_file = posix(values[1])
+        save_config(project, lambda raw: raw["fonts"].__setitem__(values[0], font_file))
+        print(f"글꼴 등록: {values[0]} -> {font_file}")
         return 0
     if not values:
         sys.exit(f"값이 필요합니다: jaguk configure {key} <값>")
     value = values[0]
+    if key in ("ocr-dict", "source"):
+        value = posix(value)
     config_key = {"ocr-dict": "ocr_dict", "lang": "ocr_lang",
                   "backend": "ocr_backend", "min-conf": "ocr_min_conf",
                   "dict-min": "ocr_dict_min", "source": "source"}[key]
