@@ -7,9 +7,9 @@
 작업 흐름:
     init        프로젝트 만들기 — 원본·데이터·지움·주입 디렉토리와 언어
     configure   설정 변경 — dict(용어표)·ocr-dict(교정 사전)·lang·backend 등
-    scan        대량 원본에서 텍스트 있는 파일 필터링 — 파일별 대상 여부만
-                data/scan.json **한 파일**에 기록 (본 OCR 은 extract 몫)
-    copy        텍스트 있다고 마킹된 파일만 source → originals 복사 (구조 유지)
+    scan        (비활성) 텍스트 있는 파일 필터링 — OCR 이 파일을 놓칠 수
+                있어 잠정 비활성. originals 에 원본을 직접 두고 작업한다
+    copy        (비활성) scan 목록 기반 복사 — 같은 이유로 잠정 비활성
     set         파일/디렉토리별 처리 규칙 — 대상은 **originals(작업 원본)
                 안** 경로 (copy 된 파일을 보면서 마킹)
                   --text-only             이미지 전체가 글자 (카탈로그로)
@@ -110,7 +110,8 @@ def cmd_init(args) -> int:
   fonts/          글꼴 파일
 source(대량 원본, 스캔 대상): {source_note}
 
-다음 단계: jaguk scan → copy → set → extract → erase → inject""")
+다음 단계: originals 에 원본을 두고 → set → extract → erase → inject
+(scan/copy 는 OCR 누락 위험으로 잠정 비활성)""")
     return 0
 
 
@@ -193,17 +194,30 @@ def scan_root(project: Project) -> Path:
     return project.source_root or project.original_root
 
 
-def load_scan(project: Project) -> dict[str, int]:
-    """scan.json → {상대경로: 줄 수}. 0 = 텍스트 없음(처리 대상 아님)."""
+# scan/copy 잠정 비활성 (2026-08-19 사용자 결정): OCR 필터링이 파일을 놓치는
+# 위험(touringspotname 전멸 사례)이 복사량 절감보다 크다. originals 에 원본을
+# 직접 두고 전수 작업한다. scan.json 이 이미 있으면 extract 가 참고는 한다.
+SCAN_DISABLED = (
+    "scan/copy 는 잠정 비활성입니다 — OCR 필터링이 파일을 놓칠 수 있습니다.\n"
+    "originals 디렉토리에 원본 트리를 직접 두고 set → extract 로 진행하세요."
+)
+
+
+def load_scan(project: Project) -> dict[str, int] | None:
+    """scan.json → {상대경로: 줄 수}. 없으면 None (scan 비활성 — 전수 작업)."""
     path = scan_path(project)
     if not path.exists():
-        sys.exit(f"스캔 결과가 없습니다: {path} — 먼저 jaguk scan")
+        return None
     return json.loads(path.read_text(encoding="utf-8"))["files"]
 
 
 def cmd_scan(args) -> int:
-    """대량 원본에서 텍스트 있는 파일 필터링 — 파일별 대상 여부만 scan.json
-    **한 파일**에 기록한다 (본 OCR·원장 기록은 extract 가 한다)."""
+    """(비활성) 대량 원본에서 텍스트 있는 파일 필터링."""
+    print(SCAN_DISABLED, file=sys.stderr)
+    return 2
+
+
+def _cmd_scan_impl(args) -> int:      # 보존 — 재활성화 대비
     project = load_project(args.config)
     root = scan_root(project)
     files = ocrmod.collect_files(root, args.only)
@@ -233,12 +247,20 @@ def cmd_scan(args) -> int:
 
 
 def cmd_copy(args) -> int:
+    """(비활성) scan 목록 기반 복사."""
+    print(SCAN_DISABLED, file=sys.stderr)
+    return 2
+
+
+def _cmd_copy_impl(args) -> int:      # 보존 — 재활성화 대비
     """scan.json 에서 텍스트 있다고 마킹된 파일만 source → originals 복사."""
     project = load_project(args.config)
     if project.source_root is None:
         print("source 미설정 — originals 를 직접 스캔했으므로 복사할 것이 없습니다.")
         return 0
     files_map = load_scan(project)
+    if files_map is None:
+        sys.exit("스캔 결과가 없습니다 (scan 은 비활성) — originals 에 직접 두세요.")
     copied = kept = missing = 0
     for relative, lines in sorted(files_map.items()):
         if not lines:
@@ -279,12 +301,12 @@ def resolve_rule_key(project: Project, target: str) -> str:
         sys.exit(f"set 대상은 작업 원본 디렉토리({root}) 안이어야 합니다: {resolved}")
     if relative == ".":
         sys.exit("originals 전체에는 규칙을 걸 수 없습니다 — 하위 경로를 지정하세요.")
-    # copy 전에 미리 마킹하는 경우를 위해 scan 목록도 검사에 쓴다
+    # 실재하지 않으면 (있다면) scan 목록으로라도 검사한다
     if not resolved.exists():
-        files_map = load_scan(project)
+        files_map = load_scan(project) or {}
         if relative not in files_map and not any(
                 f.startswith(relative.rstrip("/") + "/") for f in files_map):
-            sys.exit(f"실재하지 않고 스캔 목록에도 없는 대상입니다: {relative}")
+            sys.exit(f"실재하지 않는 대상입니다: {relative}")
     return relative
 
 
@@ -501,23 +523,24 @@ def _rule_vocab(project: Project, dict_file: str) -> list[str]:
 def cmd_extract(args) -> int:
     """마킹된 규칙대로 **본 OCR 을 다시 돌리고** 원장에 기록한다.
 
-    scan 은 대상 여부만 알므로, 여기서 originals(copy 결과)의 대상 파일을
-    규칙별로 실제 OCR 한다 — ignore 는 OCR 자체를 건너뛰고, 규칙의 --dict
-    는 그 무리에만 교정으로 적용된다.
+    대상은 originals 트리 전수다 (scan 비활성 — OCR 필터링이 파일을 놓치는
+    위험이 절감보다 크다). ignore 규칙은 OCR 자체를 건너뛰고, 규칙의
+    --dict 는 그 무리에만 교정으로 적용된다.
     """
     project = load_project(args.config)
-    files_map = load_scan(project)
     data = ledgermod.load(project)
     rules = data.get("rules", {})
 
+    targets = ocrmod.collect_files(project.original_root, args.only)
+    if not targets:
+        print(f"originals 에 이미지가 없습니다: {project.original_root} — "
+              "원본 트리를 직접 두세요 (scan/copy 는 비활성).")
+        return 1
+
     counts = {"auto": 0, "text-only": 0, "rows": 0, "ignore": 0}
     plan: list[tuple[str, str, dict, str]] = []   # (rel, rule_path, rule, mode)
-    missing = 0
-    for relative, lines in sorted(files_map.items()):
-        if not lines:
-            continue
-        if args.only and args.only.lower() not in relative.lower():
-            continue
+    for path in targets:
+        relative = path.relative_to(project.original_root).as_posix()
         rule_path, rule = match_rule(rules, relative)
         mode = rule.get("mode", "auto")
         if mode == "image-only":         # 구 이름 — 기존 원장 규칙 호환
@@ -525,14 +548,9 @@ def cmd_extract(args) -> int:
         counts[mode] = counts.get(mode, 0) + 1
         if mode == "ignore":
             continue
-        if not (project.original_root / Path(*relative.split("/"))).exists():
-            missing += 1
-            continue
         plan.append((relative, rule_path, rule, mode))
-    if missing:
-        print(f"★ originals 에 없는 대상 {missing}장 건너뜀 — 먼저 jaguk copy")
     if not plan:
-        print("추출 대상 없음 (전부 ignore/누락?)")
+        print("추출 대상 없음 (전부 ignore?)")
         return 1
 
     backend = ocrmod.pick_backend(args.backend or project.ocr_backend)
@@ -665,13 +683,13 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_configure)
 
     p = sub.add_parser("scan",
-                       help="원본에서 텍스트 있는 파일 필터링 (→ data/scan.json)")
+                       help="(비활성) 텍스트 파일 필터링 — OCR 누락 위험으로 잠정 중단")
     p.add_argument("--only", default="", help="상대 경로 부분일치 필터")
     p.add_argument("--backend", default="",
                    choices=("", "auto", "windows", "tesseract", "easyocr"))
     p.set_defaults(func=cmd_scan)
 
-    p = sub.add_parser("copy", help="스캔된 파일만 source → originals 복사")
+    p = sub.add_parser("copy", help="(비활성) scan 목록 기반 복사 — 잠정 중단")
     p.add_argument("--only", default="")
     p.add_argument("--force", action="store_true", help="이미 있는 파일도 덮어씀")
     p.set_defaults(func=cmd_copy)

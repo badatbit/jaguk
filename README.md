@@ -21,9 +21,8 @@ jaguk init [dir] --source <대량원본> [--originals originals --data data
                                      --erased erased --injected injected] --lang ja
 jaguk configure dict <용어표.json>      # 번역 용어표 (spot.json 등)
 jaguk configure ocr-dict <어휘.json>    # OCR 교정 사전 — 오독을 어휘에 스냅
-jaguk scan                              # ① 대량 원본에서 텍스트 있는 파일 필터링
-                                        #    → 파일별 대상 여부만 data/scan.json 한 파일에
-jaguk copy                              # ② 텍스트 있다고 마킹된 파일만 source → originals
+# originals/ 에 원본 트리를 직접 둔다 — scan/copy 는 OCR 이 파일을 놓칠 수
+# 있어 잠정 비활성 (놓치는 것보다 전수 작업이 낫다)
 jaguk set originals/parts/saveloadspotname --text-only --same-pattern
 jaguk set originals/parts/roadguidesign --row 1 ref --row 2 replace --multicolumn
 jaguk set originals/parts/roadsign --ignore
