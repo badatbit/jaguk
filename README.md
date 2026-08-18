@@ -24,7 +24,7 @@ jaguk configure ocr-dict <어휘.json>    # OCR 교정 사전 — 오독을 어�
 jaguk scan                              # ① 대량 원본에서 텍스트 있는 파일 필터링
                                         #    → 파일별 대상 여부만 data/scan.json 한 파일에
 jaguk copy                              # ② 텍스트 있다고 마킹된 파일만 source → originals
-jaguk set originals/parts/saveloadspotname --image-only --same-pattern
+jaguk set originals/parts/saveloadspotname --text-only --same-pattern
 jaguk set originals/parts/roadguidesign --row 1 ref --row 2 replace --multicolumn
 jaguk set originals/parts/roadsign --ignore
 jaguk extract                           # ③ 마킹된 파일만 **본 OCR** 해 규칙대로 원장에 기록
@@ -37,7 +37,7 @@ jaguk status
 - `set` 대상은 cwd 상대/절대 경로이되 **반드시 originals(작업 원본) 안**을
   가리킨다 — copy 된 실제 파일/디렉토리를 보면서 그 경로 그대로 마킹한다.
   아직 copy 전이면 scan.json 목록으로 검증한다.
-- 규칙 셋: `--image-only`(+`--same-pattern`) = 이미지 전체가 글자 →
+- 규칙 셋: `--text-only`(+`--same-pattern`) = 이미지 전체가 글자 →
   카탈로그(base 불필요) / `--row N ref|replace`(+`--multicolumn`) = ref 줄은
   원문 유지·번역 키·앵커, replace 줄은 지우고 그 자리에 주입 (안내판 꼴) /
   `--ignore` = 제외. 규칙 없는 파일은 auto(행 씨앗).

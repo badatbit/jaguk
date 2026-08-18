@@ -12,7 +12,7 @@
     copy        텍스트 있다고 마킹된 파일만 source → originals 복사 (구조 유지)
     set         파일/디렉토리별 처리 규칙 — 대상은 **originals(작업 원본)
                 안** 경로 (copy 된 파일을 보면서 마킹)
-                  --image-only            이미지 전체가 글자 (카탈로그로)
+                  --text-only             이미지 전체가 글자 (카탈로그로)
                   --same-pattern          전부 같은 스타일
                   --row N ref|replace     N번째 줄의 역할 (ref=원문 유지·앵커,
                                           replace=지우고 그 자리에 번역)
@@ -305,8 +305,8 @@ def cmd_set(args) -> int:
     rule = rules.get(key, {})
     if args.ignore:
         rule = {"mode": "ignore"}
-    elif args.image_only:
-        rule["mode"] = "image-only"
+    elif args.text_only:
+        rule["mode"] = "text-only"
     elif args.row:
         rule["mode"] = "rows"
         rows = rule.setdefault("rows", {})
@@ -448,9 +448,9 @@ def seed_rows_mode(data: dict, entry: dict, rule: dict) -> tuple[int, int]:
     return added, skipped
 
 
-def seed_image_only(data: dict, entry: dict, rule_path: str, rule: dict,
+def seed_text_only(data: dict, entry: dict, rule_path: str, rule: dict,
                     lang: str) -> tuple[int, int]:
-    """--image-only 규칙 씨앗 — 카탈로그 항목으로 (base 파일 불필요)."""
+    """--text-only 규칙 씨앗 — 카탈로그 항목으로 (base 파일 불필요)."""
     directory = rule_path
     if "." in Path(rule_path).name:            # 규칙이 파일 하나를 가리킴
         directory = str(Path(rule_path).parent).replace("\\", "/")
@@ -510,7 +510,7 @@ def cmd_extract(args) -> int:
     data = ledgermod.load(project)
     rules = data.get("rules", {})
 
-    counts = {"auto": 0, "image-only": 0, "rows": 0, "ignore": 0}
+    counts = {"auto": 0, "text-only": 0, "rows": 0, "ignore": 0}
     plan: list[tuple[str, str, dict, str]] = []   # (rel, rule_path, rule, mode)
     missing = 0
     for relative, lines in sorted(files_map.items()):
@@ -520,6 +520,8 @@ def cmd_extract(args) -> int:
             continue
         rule_path, rule = match_rule(rules, relative)
         mode = rule.get("mode", "auto")
+        if mode == "image-only":         # 구 이름 — 기존 원장 규칙 호환
+            mode = "text-only"
         counts[mode] = counts.get(mode, 0) + 1
         if mode == "ignore":
             continue
@@ -561,8 +563,8 @@ def cmd_extract(args) -> int:
         entry = by_rel.get(relative)
         if entry is None or not entry["lines"]:
             continue
-        if mode == "image-only":
-            a, s = seed_image_only(data, entry, rule_path, rule, project.ocr_lang)
+        if mode == "text-only":
+            a, s = seed_text_only(data, entry, rule_path, rule, project.ocr_lang)
         elif mode == "rows":
             a, s = seed_rows_mode(data, entry, rule)
         else:
@@ -575,7 +577,7 @@ def cmd_extract(args) -> int:
     skipped += s
     if added:
         ledgermod.save(project, data)
-    print(f"처리: auto {counts['auto']}장 / image-only {counts['image-only']}장 / "
+    print(f"처리: auto {counts['auto']}장 / text-only {counts['text-only']}장 / "
           f"rows {counts['rows']}장 / ignore {counts['ignore']}장 (OCR 제외)")
     print(f"원장 기록 {added}건 추가, 기존 {skipped}건 유지 -> {project.ledger_path}")
     return 0
@@ -677,7 +679,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("set",
                        help="파일/디렉토리 처리 규칙 (대상은 originals 안 경로)")
     p.add_argument("target", help="originals(작업 원본) 안의 파일/디렉토리")
-    p.add_argument("--image-only", action="store_true",
+    p.add_argument("--text-only", action="store_true",
                    help="이미지 전체가 글자 — 카탈로그로 처리 (base 불필요)")
     p.add_argument("--same-pattern", action="store_true",
                    help="무리 전체가 같은 스타일")
