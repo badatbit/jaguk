@@ -10,7 +10,8 @@
     scan        대량 원본에서 텍스트 있는 파일 필터링 — 파일별 대상 여부만
                 data/scan.json **한 파일**에 기록 (본 OCR 은 extract 몫)
     copy        텍스트 있다고 마킹된 파일만 source → originals 복사 (구조 유지)
-    set         파일/디렉토리별 처리 규칙 — 대상은 **data 디렉토리 안** 경로
+    set         파일/디렉토리별 처리 규칙 — 대상은 **originals(작업 원본)
+                안** 경로 (copy 된 파일을 보면서 마킹)
                   --image-only            이미지 전체가 글자 (카탈로그로)
                   --same-pattern          전부 같은 스타일
                   --row N ref|replace     N번째 줄의 역할 (ref=원문 유지·앵커,
@@ -102,7 +103,7 @@ def cmd_init(args) -> int:
 {directory.name}/
   jaguk.json      설정 (이 파일이 있는 곳이 프로젝트 루트)
   {raw['originals']}/      작업 원본 — copy 의 도착지, 파이프라인의 입력
-  {raw['data']}/           작업 데이터 — scan.json·원장 lettering.json (set 의 대상)
+  {raw['data']}/           작업 데이터 — scan.json·원장 lettering.json
   {raw['erased']}/         텍스트 지운 이미지 — erase 출력, 손질본 두는 곳
   {raw['injected']}/       텍스트 주입 결과 — inject 출력
   preview/        검수 그림
@@ -266,23 +267,24 @@ def cmd_copy(args) -> int:
 def resolve_rule_key(project: Project, target: str) -> str:
     """set 대상 경로 → 규칙 키 (이미지 트리 기준 상대 경로).
 
-    대상은 cwd 상대 또는 절대 경로이고 **반드시 data 디렉토리 안**이어야
-    한다. 파일이면 텍스트 JSON(.json 접미)을 가리키므로 접미를 벗겨
-    이미지 경로로 되돌린다.
+    대상은 cwd 상대 또는 절대 경로이고 **반드시 originals(작업 원본)
+    디렉토리 안**이어야 한다 — copy 로 복사된 실제 파일/디렉토리를 보면서
+    그 경로 그대로 마킹한다.
     """
     resolved = Path(target).resolve()
-    data_dir = project.data_root.resolve()
+    root = project.original_root.resolve()
     try:
-        relative = resolved.relative_to(data_dir).as_posix()
+        relative = resolved.relative_to(root).as_posix()
     except ValueError:
-        sys.exit(f"set 대상은 data 디렉토리({data_dir}) 안이어야 합니다: {resolved}")
-    if relative.endswith(".json"):       # 구세대 파일별 텍스트 JSON 표기 허용
-        relative = relative[:-len(".json")]
-    # 실재 검사는 scan 목록으로 — data 에는 이미지별 파일이 실제로 없다
-    files_map = load_scan(project)
-    if relative not in files_map and not any(
-            f.startswith(relative.rstrip("/") + "/") for f in files_map):
-        sys.exit(f"스캔 목록에 없는 대상입니다: {relative} — scan.json 확인")
+        sys.exit(f"set 대상은 작업 원본 디렉토리({root}) 안이어야 합니다: {resolved}")
+    if relative == ".":
+        sys.exit("originals 전체에는 규칙을 걸 수 없습니다 — 하위 경로를 지정하세요.")
+    # copy 전에 미리 마킹하는 경우를 위해 scan 목록도 검사에 쓴다
+    if not resolved.exists():
+        files_map = load_scan(project)
+        if relative not in files_map and not any(
+                f.startswith(relative.rstrip("/") + "/") for f in files_map):
+            sys.exit(f"실재하지 않고 스캔 목록에도 없는 대상입니다: {relative}")
     return relative
 
 
@@ -672,8 +674,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--force", action="store_true", help="이미 있는 파일도 덮어씀")
     p.set_defaults(func=cmd_copy)
 
-    p = sub.add_parser("set", help="파일/디렉토리 처리 규칙 (대상은 data 안 경로)")
-    p.add_argument("target", help="data 디렉토리 안의 파일/디렉토리")
+    p = sub.add_parser("set",
+                       help="파일/디렉토리 처리 규칙 (대상은 originals 안 경로)")
+    p.add_argument("target", help="originals(작업 원본) 안의 파일/디렉토리")
     p.add_argument("--image-only", action="store_true",
                    help="이미지 전체가 글자 — 카탈로그로 처리 (base 불필요)")
     p.add_argument("--same-pattern", action="store_true",
