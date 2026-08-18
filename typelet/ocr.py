@@ -614,7 +614,10 @@ def run(project: Project, only: str = "", seed: bool = False,
         print(f"원본 이미지 없음: {project.original_root} (only={only!r})")
         return 1
     backend = pick_backend(backend or project.ocr_backend)
-    print(f"OCR {len(files)}장 ({lang or project.ocr_lang}, {backend}) ...")
+    recognizer = f" 탐지 + {project.ocr_recognizer} 판독" \
+        if project.ocr_recognizer else ""
+    print(f"OCR {len(files)}장 ({lang or project.ocr_lang}, "
+          f"{backend}{recognizer}) ...")
     _, results = run_ocr(project, files, lang, backend)
 
     if project.ocr_recognizer == "manga-ocr":

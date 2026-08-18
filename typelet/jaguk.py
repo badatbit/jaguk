@@ -552,7 +552,9 @@ def cmd_extract(args) -> int:
     backend = ocrmod.pick_backend(args.backend or project.ocr_backend)
     files = [project.original_root / Path(*rel.split("/"))
              for rel, _, _, _ in plan]
-    print(f"OCR {len(files)}장 ({project.ocr_lang}, {backend}) ...")
+    recognizer = f" 탐지 + {project.ocr_recognizer} 판독" \
+        if project.ocr_recognizer else ""
+    print(f"OCR {len(files)}장 ({project.ocr_lang}, {backend}{recognizer}) ...")
     _, results = ocrmod.run_ocr(project, files, backend=backend)
 
     # 인식 보강 — 탐지된 줄의 글자 판독을 일본어 특화 모델로 재수행.
