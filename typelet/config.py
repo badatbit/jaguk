@@ -17,7 +17,8 @@
     injected        텍스트 주입 결과 (inject/render 출력)
     preview_root    검수 산출물 (boxes 그림, on-original 덧구움)
     font_root       글꼴 파일 디렉토리
-    ledger          원장 파일 (스타일 + 행)
+    ledger          원장 파일 (스타일 + 행). 생략하면 <data>/lettering.json
+                    을 따라간다 — 보통 생략하는 게 안전하다
 
     구세대 키(source_root/original_root/texts_root/texts/base_root/
     output_root)도 계속 읽는다 — 새 키가 없을 때의 알리아스.
@@ -121,6 +122,10 @@ def load_path(config_path: Path) -> Project:
         if old in file_raw and new not in file_raw:
             file_raw[new] = file_raw[old]
     raw = {**DEFAULTS, **file_raw}
+    # ledger 를 명시하지 않으면 data 디렉토리를 따라간다 — data 만 바꿔도
+    # 원장이 같이 이사하도록 (경로가 두 키에 갈라져 어긋나는 사고 방지)
+    if "ledger" not in file_raw:
+        raw["ledger"] = f"{raw['data']}/lettering.json"
     root = config_path.parent
     return Project(
         root=root,

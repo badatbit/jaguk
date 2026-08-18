@@ -64,6 +64,8 @@ def save_config(project: Project, mutate) -> None:
             file_raw.setdefault(new, file_raw[old])
             del file_raw[old]
     raw = {**DEFAULTS, **file_raw}
+    if "ledger" not in file_raw:
+        raw.pop("ledger", None)   # 명시 안 했으면 계속 data 를 따라가게 둔다
     mutate(raw)
     path.write_text(json.dumps(raw, ensure_ascii=False, indent=1) + "\n",
                     encoding="utf-8")
@@ -84,16 +86,17 @@ def cmd_init(args) -> int:
         "data": posix(args.data),
         "erased": posix(args.erased),
         "injected": posix(args.injected),
-        "ledger": f"{posix(args.data)}/lettering.json",
         "ocr_lang": args.lang,
         "ocr_backend": args.backend,
     })
+    # ledger 는 명시하지 않는다 — data 디렉토리를 자동으로 따라간다
+    raw.pop("ledger", None)
     config_path.write_text(json.dumps(raw, ensure_ascii=False, indent=1) + "\n",
                            encoding="utf-8")
     for key in ("originals", "data", "erased", "injected",
                 "preview_root", "font_root"):
         (directory / raw[key]).mkdir(parents=True, exist_ok=True)
-    ledger_path = directory / raw["ledger"]
+    ledger_path = directory / raw["data"] / "lettering.json"
     ledger_path.write_text(
         json.dumps({"styles": [], "rows": []}, ensure_ascii=False, indent=1)
         + "\n", encoding="utf-8")
