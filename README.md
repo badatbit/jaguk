@@ -27,8 +27,8 @@ jaguk copy                              # ② 스캔된 파일만 source → ori
 jaguk set texts/parts/saveloadspotname --image-only --same-pattern
 jaguk set texts/parts/roadguidesign --row 1 ref --row 2 replace --multicolumn
 jaguk set texts/parts/roadsign --ignore
-jaguk read                              # ③ 규칙대로 원장에 기록 (set 없으면 auto)
-jaguk clean [--method fill --color '#0a579d']   # ④ 텍스트 지우기 → erased/
+jaguk extract                              # ③ 규칙대로 원장에 기록 (set 없으면 auto)
+jaguk erase [--method fill --color '#0a579d']   # ④ 텍스트 지우기 → erased/
 jaguk inject                            # ⑤ 번역 주입 렌더 → injected/
 jaguk status
 ```

@@ -18,8 +18,8 @@
                   --multicolumn           한 줄에 여러 항목 (열별 짝짓기)
                   --ignore                처리 제외
                   --dict FILE             이 무리의 번역 용어표
-    read        스캔 결과를 규칙대로 원장에 기록 (set 없으면 auto = 행 씨앗)
-    clean       텍스트 지우기 — 무문자 베이스 생성
+    extract     스캔 결과를 규칙대로 원장에 기록 (set 없으면 auto = 행 씨앗)
+    erase       텍스트 지우기 — 무문자 베이스 생성
     inject      번역 주입 — 렌더
     status      진행 상황
 """
@@ -97,13 +97,13 @@ def cmd_init(args) -> int:
   jaguk.json      설정 (이 파일이 있는 곳이 프로젝트 루트)
   {raw['originals']}/      작업 원본 — copy 의 도착지, 파이프라인의 입력
   {raw['texts']}/          추출 텍스트 JSON + 원장 lettering.json (set 의 대상)
-  {raw['erased']}/         텍스트 지운 이미지 — clean 출력, 손질본 두는 곳
+  {raw['erased']}/         텍스트 지운 이미지 — erase 출력, 손질본 두는 곳
   {raw['injected']}/       텍스트 주입 결과 — inject 출력
   preview/        검수 그림
   fonts/          글꼴 파일
 source(대량 원본, 스캔 대상): {source_note}
 
-다음 단계: jaguk scan → copy → set → read → clean → inject""")
+다음 단계: jaguk scan → copy → set → extract → erase → inject""")
     return 0
 
 
@@ -438,7 +438,7 @@ def seed_rows_mode(data: dict, entry: dict, rule: dict) -> tuple[int, int]:
             "style": rule.get("style", ""),
             "opacity": "FF",
             "status": "todo",
-            "notes": "jaguk read (rows)",
+            "notes": "jaguk extract (rows)",
         })
         added += 1
     return added, skipped
@@ -481,7 +481,7 @@ def seed_image_only(data: dict, entry: dict, rule_path: str, rule: dict,
     return 1, 0
 
 
-def cmd_read(args) -> int:
+def cmd_extract(args) -> int:
     project = load_project(args.config)
     entries = scan_entries(project, args.only)
     if not entries:
@@ -519,9 +519,9 @@ def cmd_read(args) -> int:
     return 0
 
 
-# ---- clean / inject / status ------------------------------------------------
+# ---- erase / inject / status ------------------------------------------------
 
-def cmd_clean(args) -> int:
+def cmd_erase(args) -> int:
     from . import erase
     project = load_project(args.config)
     return erase.run(project, only=args.only, method=args.method,
@@ -571,7 +571,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="jaguk",
         description="이미지 텍스트 로컬라이징 통합 CLI — "
-                    "scan → copy → set → read → clean → inject",
+                    "scan → copy → set → extract → erase → inject",
     )
     parser.add_argument("-c", "--config", default="",
                         help=f"설정 파일 (기본: cwd 의 {CONFIG_NAME})")
@@ -586,7 +586,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--texts", default="texts",
                    help="추출 텍스트 JSON·원장 저장소 (기본 texts)")
     p.add_argument("--erased", default="erased",
-                   help="텍스트 지운 이미지 — clean 출력 (기본 erased)")
+                   help="텍스트 지운 이미지 — erase 출력 (기본 erased)")
     p.add_argument("--injected", default="injected",
                    help="텍스트 주입 결과 — inject 출력 (기본 injected)")
     p.add_argument("--lang", default="ja", help="OCR 언어 (기본 ja)")
@@ -627,18 +627,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--clear", action="store_true", help="규칙 제거")
     p.set_defaults(func=cmd_set)
 
-    p = sub.add_parser("read", help="스캔 결과를 규칙대로 원장에 기록")
+    p = sub.add_parser("extract", help="스캔 결과를 규칙대로 원장에 기록")
     p.add_argument("--only", default="")
-    p.set_defaults(func=cmd_read)
+    p.set_defaults(func=cmd_extract)
 
-    p = sub.add_parser("clean", help="텍스트 지우기 (→ base)")
+    p = sub.add_parser("erase", help="텍스트 지우기 (→ erased)")
     p.add_argument("--only", default="")
     p.add_argument("--method", default="auto",
                    choices=("auto", "inpaint", "median", "alpha", "fill"))
     p.add_argument("--color", default="", help="fill 방식 채움색 #RRGGBB")
     p.add_argument("--pad", type=int, default=2)
     p.add_argument("--force", action="store_true")
-    p.set_defaults(func=cmd_clean)
+    p.set_defaults(func=cmd_erase)
 
     p = sub.add_parser("inject", help="번역 주입 렌더 (→ out)")
     p.add_argument("--status", action="append")
