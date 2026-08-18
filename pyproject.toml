@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "type-lettering"
+version = "0.1.0"
+description = "이미지 텍스트 로컬라이징 파이프라인 — 추출(OCR) · 지우기 · 주입(렌더)"
+requires-python = ">=3.10"
+dependencies = [
+    "Pillow>=10",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+# erase 의 inpaint 방식에만 필요 (없으면 median 방식으로 동작)
+inpaint = ["opencv-python-headless>=4.8"]
+
+[project.scripts]
+typelet = "typelet.cli:main"
+
+[tool.setuptools]
+packages = ["typelet"]
+
+[tool.setuptools.package-data]
+typelet = ["*.ps1"]
