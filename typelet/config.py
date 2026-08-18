@@ -11,15 +11,16 @@
                     보통 프로젝트 밖 읽기 전용 덤프. 비어 있으면 originals
                     를 직접 스캔한다
     originals       작업 원본 — copy 의 도착지이자 파이프라인의 입력
-    texts           추출 텍스트(파일별 JSON)와 원장(lettering.json) 저장소
+    data            작업 데이터 저장소 — 원장(lettering.json)·scan.json 등
+                    이런저런 정보를 다 담는다
     erased          텍스트 지운 이미지 (clean/erase 출력, 손질본 포함)
     injected        텍스트 주입 결과 (inject/render 출력)
     preview_root    검수 산출물 (boxes 그림, on-original 덧구움)
     font_root       글꼴 파일 디렉토리
     ledger          원장 파일 (스타일 + 행)
 
-    구세대 키(source_root/original_root/texts_root/base_root/output_root)도
-    계속 읽는다 — 새 키가 없을 때의 알리아스.
+    구세대 키(source_root/original_root/texts_root/texts/base_root/
+    output_root)도 계속 읽는다 — 새 키가 없을 때의 알리아스.
     ocr_lang        OCR 언어 (BCP-47, 예: "ja" — tesseract 코드로는 자동 변환)
     ocr_backend     "auto" | "windows" | "tesseract" | "easyocr"
                     (auto = win32 면 windows, 아니면 tesseract → easyocr)
@@ -44,7 +45,7 @@ CONFIG_NAME = "typelet.config.json"
 DEFAULTS = {
     "source": "",
     "originals": "originals",
-    "texts": "texts",
+    "data": "data",
     "erased": "erased",
     "injected": "injected",
     "preview_root": "preview",
@@ -64,7 +65,7 @@ class Project:
     root: Path
     original_root: Path
     source_root: Path | None
-    texts_root: Path
+    data_root: Path
     base_root: Path
     output_root: Path
     preview_root: Path
@@ -106,7 +107,8 @@ def load(start: Path | None = None) -> Project:
 LEGACY_KEYS = {
     "source_root": "source",
     "original_root": "originals",
-    "texts_root": "texts",
+    "texts_root": "data",
+    "texts": "data",
     "base_root": "erased",
     "output_root": "injected",
 }
@@ -124,7 +126,7 @@ def load_path(config_path: Path) -> Project:
         root=root,
         original_root=_resolve(root, raw["originals"]),
         source_root=_resolve(root, raw["source"]) if raw["source"] else None,
-        texts_root=_resolve(root, raw["texts"]),
+        data_root=_resolve(root, raw["data"]),
         base_root=_resolve(root, raw["erased"]),
         output_root=_resolve(root, raw["injected"]),
         preview_root=_resolve(root, raw["preview_root"]),
@@ -150,7 +152,7 @@ def init(directory: Path) -> Path:
         json.dumps(DEFAULTS, ensure_ascii=False, indent=1) + "\n",
         encoding="utf-8",
     )
-    for key in ("originals", "texts", "erased", "injected",
+    for key in ("originals", "data", "erased", "injected",
                 "preview_root", "font_root"):
         (directory / DEFAULTS[key]).mkdir(exist_ok=True)
     ledger_path = directory / DEFAULTS["ledger"]

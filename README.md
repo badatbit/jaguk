@@ -13,20 +13,20 @@ CLI 는 둘이다:
 설정은 **cwd 의 `jaguk.json`** (또는 `-c 파일`). 흐름:
 
 디렉토리 이름은 파이프라인 단계다 — `source`(대량 원본, 스캔 대상) →
-`originals`(작업 원본) → `texts`(추출 텍스트·원장) → `erased`(텍스트 지운
-이미지) → `injected`(주입 결과):
+`originals`(작업 원본) → `data`(작업 데이터 — scan.json·원장 등 이런저런
+정보 전부) → `erased`(텍스트 지운 이미지) → `injected`(주입 결과):
 
 ```
-jaguk init [dir] --source <대량원본> [--originals originals --texts texts
+jaguk init [dir] --source <대량원본> [--originals originals --data data
                                      --erased erased --injected injected] --lang ja
 jaguk configure dict <용어표.json>      # 번역 용어표 (spot.json 등)
 jaguk configure ocr-dict <어휘.json>    # OCR 교정 사전 — 오독을 어휘에 스냅
 jaguk scan                              # ① 대량 원본에서 텍스트 있는 파일 필터링
-                                        #    → 파일별 대상 여부만 texts/scan.json 한 파일에
+                                        #    → 파일별 대상 여부만 data/scan.json 한 파일에
 jaguk copy                              # ② 텍스트 있다고 마킹된 파일만 source → originals
-jaguk set texts/parts/saveloadspotname --image-only --same-pattern
-jaguk set texts/parts/roadguidesign --row 1 ref --row 2 replace --multicolumn
-jaguk set texts/parts/roadsign --ignore
+jaguk set data/parts/saveloadspotname --image-only --same-pattern
+jaguk set data/parts/roadguidesign --row 1 ref --row 2 replace --multicolumn
+jaguk set data/parts/roadsign --ignore
 jaguk extract                           # ③ 마킹된 파일만 **본 OCR** 해 규칙대로 원장에 기록
                                         #    (ignore 는 OCR 도 안 함, 규칙 --dict 는 그 무리에만 교정)
 jaguk erase [--method fill --color '#0a579d']   # ④ 텍스트 지우기 → erased/
@@ -34,8 +34,8 @@ jaguk inject                            # ⑤ 번역 주입 렌더 → injected/
 jaguk status
 ```
 
-- `set` 대상은 cwd 상대/절대 경로이되 **반드시 texts 디렉토리 안** 이름공간을
-  가리킨다 (`texts/<이미지 트리 경로>`). 실재하는 파일일 필요는 없다 —
+- `set` 대상은 cwd 상대/절대 경로이되 **반드시 data 디렉토리 안** 이름공간을
+  가리킨다 (`data/<이미지 트리 경로>`). 실재하는 파일일 필요는 없다 —
   scan.json 목록에 있는지로 검증한다.
 - 규칙 셋: `--image-only`(+`--same-pattern`) = 이미지 전체가 글자 →
   카탈로그(base 불필요) / `--row N ref|replace`(+`--multicolumn`) = ref 줄은
@@ -90,7 +90,7 @@ typelet status                  # 진행 상황
 typelet.config.json   설정 — 경로·글꼴 매핑·OCR 언어. 이 파일이 있는 곳이 루트
 lettering.json        원장 — 스타일 + 행. 파일이 원본이다
 originals/            작업 원본 이미지 트리 (읽기 전용 취급)
-texts/                추출 텍스트 저장소 (jaguk 이 쓴다)
+data/                 작업 데이터 저장소 — scan.json·원장 (jaguk 이 쓴다)
 erased/               텍스트 지운 이미지 (erase 출력 + 손질본)
 injected/             텍스트 주입 결과 (render 출력)
 preview/              검수 산출물 (boxes, ko-on-original)

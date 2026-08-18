@@ -5,12 +5,12 @@
 프로젝트 루트다. 스키마는 typelet.config.json 과 같다.
 
 작업 흐름:
-    init        프로젝트 만들기 — 원본·텍스트·베이스·출력 디렉토리와 언어
+    init        프로젝트 만들기 — 원본·데이터·지움·주입 디렉토리와 언어
     configure   설정 변경 — dict(용어표)·ocr-dict(교정 사전)·lang·backend 등
     scan        대량 원본에서 텍스트 있는 파일 필터링 — 파일별 대상 여부만
-                texts/scan.json **한 파일**에 기록 (본 OCR 은 extract 몫)
+                data/scan.json **한 파일**에 기록 (본 OCR 은 extract 몫)
     copy        텍스트 있다고 마킹된 파일만 source → originals 복사 (구조 유지)
-    set         파일/디렉토리별 처리 규칙 — 대상은 **texts 디렉토리 안** 경로
+    set         파일/디렉토리별 처리 규칙 — 대상은 **data 디렉토리 안** 경로
                   --image-only            이미지 전체가 글자 (카탈로그로)
                   --same-pattern          전부 같은 스타일
                   --row N ref|replace     N번째 줄의 역할 (ref=원문 유지·앵커,
@@ -80,16 +80,16 @@ def cmd_init(args) -> int:
     raw.update({
         "source": posix(args.source),
         "originals": posix(args.originals),
-        "texts": posix(args.texts),
+        "data": posix(args.data),
         "erased": posix(args.erased),
         "injected": posix(args.injected),
-        "ledger": f"{posix(args.texts)}/lettering.json",
+        "ledger": f"{posix(args.data)}/lettering.json",
         "ocr_lang": args.lang,
         "ocr_backend": args.backend,
     })
     config_path.write_text(json.dumps(raw, ensure_ascii=False, indent=1) + "\n",
                            encoding="utf-8")
-    for key in ("originals", "texts", "erased", "injected",
+    for key in ("originals", "data", "erased", "injected",
                 "preview_root", "font_root"):
         (directory / raw[key]).mkdir(parents=True, exist_ok=True)
     ledger_path = directory / raw["ledger"]
@@ -102,7 +102,7 @@ def cmd_init(args) -> int:
 {directory.name}/
   jaguk.json      설정 (이 파일이 있는 곳이 프로젝트 루트)
   {raw['originals']}/      작업 원본 — copy 의 도착지, 파이프라인의 입력
-  {raw['texts']}/          추출 텍스트 JSON + 원장 lettering.json (set 의 대상)
+  {raw['data']}/           작업 데이터 — scan.json·원장 lettering.json (set 의 대상)
   {raw['erased']}/         텍스트 지운 이미지 — erase 출력, 손질본 두는 곳
   {raw['injected']}/       텍스트 주입 결과 — inject 출력
   preview/        검수 그림
@@ -126,7 +126,7 @@ def cmd_configure(args) -> int:
         print(f"프로젝트: {project.root}")
         print(f"  source   = {project.source_root or '(없음 — originals 직접 스캔)'}")
         print(f"  originals= {project.original_root}")
-        print(f"  texts    = {project.texts_root}")
+        print(f"  data     = {project.data_root}")
         print(f"  erased   = {project.base_root}")
         print(f"  injected = {project.output_root}")
         print(f"  lang     = {project.ocr_lang} / backend = {project.ocr_backend}")
@@ -185,7 +185,7 @@ def cmd_configure(args) -> int:
 # ---- scan / copy ------------------------------------------------------------
 
 def scan_path(project: Project) -> Path:
-    return project.texts_root / "scan.json"
+    return project.data_root / "scan.json"
 
 
 def scan_root(project: Project) -> Path:
@@ -266,19 +266,19 @@ def cmd_copy(args) -> int:
 def resolve_rule_key(project: Project, target: str) -> str:
     """set 대상 경로 → 규칙 키 (이미지 트리 기준 상대 경로).
 
-    대상은 cwd 상대 또는 절대 경로이고 **반드시 texts 디렉토리 안**이어야
+    대상은 cwd 상대 또는 절대 경로이고 **반드시 data 디렉토리 안**이어야
     한다. 파일이면 텍스트 JSON(.json 접미)을 가리키므로 접미를 벗겨
     이미지 경로로 되돌린다.
     """
     resolved = Path(target).resolve()
-    texts = project.texts_root.resolve()
+    data_dir = project.data_root.resolve()
     try:
-        relative = resolved.relative_to(texts).as_posix()
+        relative = resolved.relative_to(data_dir).as_posix()
     except ValueError:
-        sys.exit(f"set 대상은 텍스트 디렉토리({texts}) 안이어야 합니다: {resolved}")
+        sys.exit(f"set 대상은 data 디렉토리({data_dir}) 안이어야 합니다: {resolved}")
     if relative.endswith(".json"):       # 구세대 파일별 텍스트 JSON 표기 허용
         relative = relative[:-len(".json")]
-    # 실재 검사는 scan 목록으로 — texts 에는 파일이 실제로 없다
+    # 실재 검사는 scan 목록으로 — data 에는 이미지별 파일이 실제로 없다
     files_map = load_scan(project)
     if relative not in files_map and not any(
             f.startswith(relative.rstrip("/") + "/") for f in files_map):
@@ -643,8 +643,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="대량 원본 트리 — scan 대상, copy 출발지 (보통 프로젝트 밖)")
     p.add_argument("--originals", default="originals",
                    help="작업 원본 — copy 도착지, 파이프라인 입력 (기본 originals)")
-    p.add_argument("--texts", default="texts",
-                   help="추출 텍스트 JSON·원장 저장소 (기본 texts)")
+    p.add_argument("--data", default="data",
+                   help="작업 데이터 저장소 — scan.json·원장 등 (기본 data)")
     p.add_argument("--erased", default="erased",
                    help="텍스트 지운 이미지 — erase 출력 (기본 erased)")
     p.add_argument("--injected", default="injected",
@@ -660,7 +660,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("value", nargs="*", help="설정 값")
     p.set_defaults(func=cmd_configure)
 
-    p = sub.add_parser("scan", help="원본에서 텍스트 있는 파일 스캔 (→ texts)")
+    p = sub.add_parser("scan",
+                       help="원본에서 텍스트 있는 파일 필터링 (→ data/scan.json)")
     p.add_argument("--only", default="", help="상대 경로 부분일치 필터")
     p.add_argument("--backend", default="",
                    choices=("", "auto", "windows", "tesseract", "easyocr"))
@@ -671,8 +672,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--force", action="store_true", help="이미 있는 파일도 덮어씀")
     p.set_defaults(func=cmd_copy)
 
-    p = sub.add_parser("set", help="파일/디렉토리 처리 규칙 (대상은 texts 안 경로)")
-    p.add_argument("target", help="texts 디렉토리 안의 파일/디렉토리")
+    p = sub.add_parser("set", help="파일/디렉토리 처리 규칙 (대상은 data 안 경로)")
+    p.add_argument("target", help="data 디렉토리 안의 파일/디렉토리")
     p.add_argument("--image-only", action="store_true",
                    help="이미지 전체가 글자 — 카탈로그로 처리 (base 불필요)")
     p.add_argument("--same-pattern", action="store_true",
