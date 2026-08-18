@@ -50,7 +50,13 @@ def load_project(config_arg: str) -> Project:
 
 def save_config(project: Project, mutate) -> None:
     path = project.root / CONFIG_NAME
-    raw = {**DEFAULTS, **json.loads(path.read_text(encoding="utf-8"))}
+    file_raw = json.loads(path.read_text(encoding="utf-8"))
+    # 구세대 키는 저장하면서 새 키로 이행한다 (값 보존, 구 키 제거)
+    for old, new in configmod.LEGACY_KEYS.items():
+        if old in file_raw:
+            file_raw.setdefault(new, file_raw[old])
+            del file_raw[old]
+    raw = {**DEFAULTS, **file_raw}
     mutate(raw)
     path.write_text(json.dumps(raw, ensure_ascii=False, indent=1) + "\n",
                     encoding="utf-8")
@@ -66,18 +72,18 @@ def cmd_init(args) -> int:
     directory.mkdir(parents=True, exist_ok=True)
     raw = dict(DEFAULTS)
     raw.update({
-        "source_root": args.source,
-        "original_root": args.originals,
-        "texts_root": args.texts,
-        "base_root": args.base,
-        "output_root": args.out,
+        "source": args.source,
+        "originals": args.originals,
+        "texts": args.texts,
+        "erased": args.erased,
+        "injected": args.injected,
         "ledger": f"{args.texts}/lettering.json",
         "ocr_lang": args.lang,
         "ocr_backend": args.backend,
     })
     config_path.write_text(json.dumps(raw, ensure_ascii=False, indent=1) + "\n",
                            encoding="utf-8")
-    for key in ("original_root", "texts_root", "base_root", "output_root",
+    for key in ("originals", "texts", "erased", "injected",
                 "preview_root", "font_root"):
         (directory / raw[key]).mkdir(parents=True, exist_ok=True)
     ledger_path = directory / raw["ledger"]
@@ -85,7 +91,19 @@ def cmd_init(args) -> int:
         json.dumps({"styles": [], "rows": []}, ensure_ascii=False, indent=1)
         + "\n", encoding="utf-8")
     print(f"프로젝트 생성: {config_path}")
-    print("다음 단계: jaguk scan → copy → set → read → clean → inject")
+    source_note = raw["source"] or "(미설정 — originals 를 직접 스캔)"
+    print(f"""
+{directory.name}/
+  jaguk.json      설정 (이 파일이 있는 곳이 프로젝트 루트)
+  {raw['originals']}/      작업 원본 — copy 의 도착지, 파이프라인의 입력
+  {raw['texts']}/          추출 텍스트 JSON + 원장 lettering.json (set 의 대상)
+  {raw['erased']}/         텍스트 지운 이미지 — clean 출력, 손질본 두는 곳
+  {raw['injected']}/       텍스트 주입 결과 — inject 출력
+  preview/        검수 그림
+  fonts/          글꼴 파일
+source(대량 원본, 스캔 대상): {source_note}
+
+다음 단계: jaguk scan → copy → set → read → clean → inject""")
     return 0
 
 
@@ -103,8 +121,8 @@ def cmd_configure(args) -> int:
         print(f"  source   = {project.source_root or '(없음 — originals 직접 스캔)'}")
         print(f"  originals= {project.original_root}")
         print(f"  texts    = {project.texts_root}")
-        print(f"  base     = {project.base_root}")
-        print(f"  out      = {project.output_root}")
+        print(f"  erased   = {project.base_root}")
+        print(f"  injected = {project.output_root}")
         print(f"  lang     = {project.ocr_lang} / backend = {project.ocr_backend}")
         print(f"  ocr_dict = {project.ocr_dict or '(없음)'}")
         data = ledgermod.load(project)
@@ -140,7 +158,7 @@ def cmd_configure(args) -> int:
     value = values[0]
     config_key = {"ocr-dict": "ocr_dict", "lang": "ocr_lang",
                   "backend": "ocr_backend", "min-conf": "ocr_min_conf",
-                  "dict-min": "ocr_dict_min", "source": "source_root"}[key]
+                  "dict-min": "ocr_dict_min", "source": "source"}[key]
 
     def mutate(raw):
         if config_key == "ocr_dict":
@@ -561,11 +579,16 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("init", help="프로젝트 생성")
     p.add_argument("directory", nargs="?", default=".")
-    p.add_argument("--source", default="", help="대량 원본 트리 (외부, 스캔 대상)")
-    p.add_argument("--originals", default="originals", help="작업 원본 디렉토리")
-    p.add_argument("--texts", default="texts", help="텍스트 파일 저장 디렉토리")
-    p.add_argument("--base", default="base", help="텍스트 지운 이미지 디렉토리")
-    p.add_argument("--out", default="out", help="텍스트 주입 결과 디렉토리")
+    p.add_argument("--source", default="",
+                   help="대량 원본 트리 — scan 대상, copy 출발지 (보통 프로젝트 밖)")
+    p.add_argument("--originals", default="originals",
+                   help="작업 원본 — copy 도착지, 파이프라인 입력 (기본 originals)")
+    p.add_argument("--texts", default="texts",
+                   help="추출 텍스트 JSON·원장 저장소 (기본 texts)")
+    p.add_argument("--erased", default="erased",
+                   help="텍스트 지운 이미지 — clean 출력 (기본 erased)")
+    p.add_argument("--injected", default="injected",
+                   help="텍스트 주입 결과 — inject 출력 (기본 injected)")
     p.add_argument("--lang", default="ja", help="OCR 언어 (기본 ja)")
     p.add_argument("--backend", default="auto",
                    choices=("auto", "windows", "tesseract", "easyocr"))

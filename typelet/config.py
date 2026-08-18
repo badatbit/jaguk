@@ -5,16 +5,21 @@
 올라가며 설정 파일을 찾는다 (git 처럼). 경로 값은 설정 파일 기준 상대 경로
 또는 절대 경로.
 
-    original_root   원본 이미지 트리 (읽기 전용 취급, 작업 대상)
-    source_root     (선택) 대량 원본 트리 — jaguk scan 이 훑고, copy 가
-                    텍스트 있는 파일만 original_root 로 복사한다.
-                    비어 있으면 original_root 를 직접 스캔한다
-    texts_root      텍스트 데이터 저장소 (scan.json 등 — jaguk 이 쓴다)
-    base_root       무문자 베이스 트리 (erase 출력, 손질본 포함)
-    output_root     렌더 결과 트리
+    디렉토리 키는 파이프라인 단계 이름이다:
+
+    source          (선택) 대량 원본 트리 — scan 의 대상, copy 의 출발지.
+                    보통 프로젝트 밖 읽기 전용 덤프. 비어 있으면 originals
+                    를 직접 스캔한다
+    originals       작업 원본 — copy 의 도착지이자 파이프라인의 입력
+    texts           추출 텍스트(파일별 JSON)와 원장(lettering.json) 저장소
+    erased          텍스트 지운 이미지 (clean/erase 출력, 손질본 포함)
+    injected        텍스트 주입 결과 (inject/render 출력)
     preview_root    검수 산출물 (boxes 그림, on-original 덧구움)
     font_root       글꼴 파일 디렉토리
     ledger          원장 파일 (스타일 + 행)
+
+    구세대 키(source_root/original_root/texts_root/base_root/output_root)도
+    계속 읽는다 — 새 키가 없을 때의 알리아스.
     ocr_lang        OCR 언어 (BCP-47, 예: "ja" — tesseract 코드로는 자동 변환)
     ocr_backend     "auto" | "windows" | "tesseract" | "easyocr"
                     (auto = win32 면 windows, 아니면 tesseract → easyocr)
@@ -37,11 +42,11 @@ from pathlib import Path
 CONFIG_NAME = "typelet.config.json"
 
 DEFAULTS = {
-    "original_root": "originals",
-    "source_root": "",
-    "texts_root": "texts",
-    "base_root": "base",
-    "output_root": "out",
+    "source": "",
+    "originals": "originals",
+    "texts": "texts",
+    "erased": "erased",
+    "injected": "injected",
     "preview_root": "preview",
     "font_root": "fonts",
     "ledger": "lettering.json",
@@ -97,17 +102,31 @@ def load(start: Path | None = None) -> Project:
     return load_path(config_path)
 
 
+# 구세대 키 → 새 키 (설정 파일에 구 키만 있으면 그 값을 새 키로 옮긴다)
+LEGACY_KEYS = {
+    "source_root": "source",
+    "original_root": "originals",
+    "texts_root": "texts",
+    "base_root": "erased",
+    "output_root": "injected",
+}
+
+
 def load_path(config_path: Path) -> Project:
     """설정 파일 경로를 직접 지정해 읽는다 (jaguk -c 등)."""
-    raw = {**DEFAULTS, **json.loads(config_path.read_text(encoding="utf-8"))}
+    file_raw = json.loads(config_path.read_text(encoding="utf-8"))
+    for old, new in LEGACY_KEYS.items():
+        if old in file_raw and new not in file_raw:
+            file_raw[new] = file_raw[old]
+    raw = {**DEFAULTS, **file_raw}
     root = config_path.parent
     return Project(
         root=root,
-        original_root=_resolve(root, raw["original_root"]),
-        source_root=_resolve(root, raw["source_root"]) if raw["source_root"] else None,
-        texts_root=_resolve(root, raw["texts_root"]),
-        base_root=_resolve(root, raw["base_root"]),
-        output_root=_resolve(root, raw["output_root"]),
+        original_root=_resolve(root, raw["originals"]),
+        source_root=_resolve(root, raw["source"]) if raw["source"] else None,
+        texts_root=_resolve(root, raw["texts"]),
+        base_root=_resolve(root, raw["erased"]),
+        output_root=_resolve(root, raw["injected"]),
         preview_root=_resolve(root, raw["preview_root"]),
         font_root=_resolve(root, raw["font_root"]),
         ledger_path=_resolve(root, raw["ledger"]),
@@ -131,7 +150,7 @@ def init(directory: Path) -> Path:
         json.dumps(DEFAULTS, ensure_ascii=False, indent=1) + "\n",
         encoding="utf-8",
     )
-    for key in ("original_root", "base_root", "output_root",
+    for key in ("originals", "texts", "erased", "injected",
                 "preview_root", "font_root"):
         (directory / DEFAULTS[key]).mkdir(exist_ok=True)
     ledger_path = directory / DEFAULTS["ledger"]

@@ -12,8 +12,13 @@ CLI 는 둘이다:
 
 설정은 **cwd 의 `jaguk.json`** (또는 `-c 파일`). 흐름:
 
+디렉토리 이름은 파이프라인 단계다 — `source`(대량 원본, 스캔 대상) →
+`originals`(작업 원본) → `texts`(추출 텍스트·원장) → `erased`(텍스트 지운
+이미지) → `injected`(주입 결과):
+
 ```
-jaguk init [dir] --source <대량원본> --texts texts --base base --out out --lang ja
+jaguk init [dir] --source <대량원본> [--originals originals --texts texts
+                                     --erased erased --injected injected] --lang ja
 jaguk configure dict <용어표.json>      # 번역 용어표 (spot.json 등)
 jaguk configure ocr-dict <어휘.json>    # OCR 교정 사전 — 오독을 어휘에 스냅
 jaguk scan                              # ① 원본에서 텍스트 있는 파일 스캔
@@ -23,8 +28,8 @@ jaguk set texts/parts/saveloadspotname --image-only --same-pattern
 jaguk set texts/parts/roadguidesign --row 1 ref --row 2 replace --multicolumn
 jaguk set texts/parts/roadsign --ignore
 jaguk read                              # ③ 규칙대로 원장에 기록 (set 없으면 auto)
-jaguk clean [--method fill --color '#0a579d']   # ④ 텍스트 지우기 → base/
-jaguk inject                            # ⑤ 번역 주입 렌더 → out/
+jaguk clean [--method fill --color '#0a579d']   # ④ 텍스트 지우기 → erased/
+jaguk inject                            # ⑤ 번역 주입 렌더 → injected/
 jaguk status
 ```
 
@@ -82,9 +87,10 @@ typelet status                  # 진행 상황
 ```
 typelet.config.json   설정 — 경로·글꼴 매핑·OCR 언어. 이 파일이 있는 곳이 루트
 lettering.json        원장 — 스타일 + 행. 파일이 원본이다
-originals/            원본 이미지 트리 (읽기 전용 취급)
-base/                 무문자 베이스 (erase 출력 + 손질본)
-out/                  렌더 결과
+originals/            작업 원본 이미지 트리 (읽기 전용 취급)
+texts/                추출 텍스트 저장소 (jaguk 이 쓴다)
+erased/               텍스트 지운 이미지 (erase 출력 + 손질본)
+injected/             텍스트 주입 결과 (render 출력)
 preview/              검수 산출물 (boxes, ko-on-original)
 fonts/                글꼴 파일 — 설정 "fonts" 의 "패밀리/weight" → 파일 매핑
 ```
