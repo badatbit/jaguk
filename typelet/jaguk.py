@@ -7,9 +7,9 @@
 작업 흐름:
     init        프로젝트 만들기 — 원본·텍스트·베이스·출력 디렉토리와 언어
     configure   설정 변경 — dict(용어표)·ocr-dict(교정 사전)·lang·backend 등
-    scan        원본에서 텍스트 있는 파일 찾기 — 파일별 텍스트 JSON 을
-                texts 디렉토리에 원본 구조 그대로 저장
-    copy        스캔된 파일만 source → originals 복사 (구조 유지)
+    scan        대량 원본에서 텍스트 있는 파일 필터링 — 파일별 대상 여부만
+                texts/scan.json **한 파일**에 기록 (본 OCR 은 extract 몫)
+    copy        텍스트 있다고 마킹된 파일만 source → originals 복사 (구조 유지)
     set         파일/디렉토리별 처리 규칙 — 대상은 **texts 디렉토리 안** 경로
                   --image-only            이미지 전체가 글자 (카탈로그로)
                   --same-pattern          전부 같은 스타일
@@ -18,7 +18,8 @@
                   --multicolumn           한 줄에 여러 항목 (열별 짝짓기)
                   --ignore                처리 제외
                   --dict FILE             이 무리의 번역 용어표
-    extract     스캔 결과를 규칙대로 원장에 기록 (set 없으면 auto = 행 씨앗)
+    extract     마킹된 파일을 규칙대로 **본 OCR** 해 원장에 기록
+                (set 없으면 auto = 행 씨앗, ignore 는 OCR 도 안 함)
     erase       텍스트 지우기 — 무문자 베이스 생성
     inject      번역 주입 — 렌더
     status      진행 상황
@@ -183,15 +184,25 @@ def cmd_configure(args) -> int:
 
 # ---- scan / copy ------------------------------------------------------------
 
-def text_json_path(project: Project, relative: str) -> Path:
-    return project.texts_root / (relative + ".json")
+def scan_path(project: Project) -> Path:
+    return project.texts_root / "scan.json"
 
 
 def scan_root(project: Project) -> Path:
     return project.source_root or project.original_root
 
 
+def load_scan(project: Project) -> dict[str, int]:
+    """scan.json → {상대경로: 줄 수}. 0 = 텍스트 없음(처리 대상 아님)."""
+    path = scan_path(project)
+    if not path.exists():
+        sys.exit(f"스캔 결과가 없습니다: {path} — 먼저 jaguk scan")
+    return json.loads(path.read_text(encoding="utf-8"))["files"]
+
+
 def cmd_scan(args) -> int:
+    """대량 원본에서 텍스트 있는 파일 필터링 — 파일별 대상 여부만 scan.json
+    **한 파일**에 기록한다 (본 OCR·원장 기록은 extract 가 한다)."""
     project = load_project(args.config)
     root = scan_root(project)
     files = ocrmod.collect_files(root, args.only)
@@ -202,55 +213,37 @@ def cmd_scan(args) -> int:
     print(f"스캔 {len(files)}장 ({project.ocr_lang}, {backend}) — {root}")
     _, results = ocrmod.run_ocr(project, files, backend=backend, root=root)
 
-    vocab = ocrmod.load_ocr_dict(project)
-    if vocab:
-        corrected = ocrmod.correct_results(results, vocab, project.ocr_dict_min)
-        print(f"교정 사전 {len(vocab)}어휘 — {corrected}줄 교정")
-
-    with_text = without = 0
+    path = scan_path(project)
+    files_map: dict[str, int] = {}
+    if path.exists() and args.only:      # 부분 스캔은 기존 목록에 병합
+        files_map = json.loads(path.read_text(encoding="utf-8"))["files"]
     for entry in results:
-        if not entry["lines"]:
-            without += 1
-            continue
-        with_text += 1
-        out_path = text_json_path(project, entry["file"])
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(
-            json.dumps(entry, ensure_ascii=False, indent=1) + "\n",
-            encoding="utf-8")
-        print(f"  {entry['file']:44} {len(entry['lines']):>3}줄")
-    print(f"\n텍스트 있음 {with_text}장 / 없음 {without}장 -> {project.texts_root}")
+        files_map[entry["file"]] = len(entry["lines"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(
+        {"root": posix(str(root)), "backend": backend,
+         "files": dict(sorted(files_map.items()))},
+        ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+
+    with_text = sum(1 for n in files_map.values() if n)
+    print(f"텍스트 있음 {with_text}장 / 없음 {len(files_map) - with_text}장 "
+          f"-> {path}")
     return 0
 
 
-def scan_entries(project: Project, only: str = "") -> list[dict]:
-    """texts 트리의 파일별 텍스트 JSON 을 읽는다 (scan 산출물)."""
-    entries = []
-    ledger_resolved = project.ledger_path.resolve()
-    for path in sorted(project.texts_root.rglob("*.json")):
-        if path.resolve() == ledger_resolved:
-            continue
-        entry = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(entry, dict) or "lines" not in entry:
-            continue                     # 텍스트 JSON 이 아닌 파일은 무시
-        if only and only.lower() not in entry["file"].lower():
-            continue
-        entries.append(entry)
-    return entries
-
-
 def cmd_copy(args) -> int:
+    """scan.json 에서 텍스트 있다고 마킹된 파일만 source → originals 복사."""
     project = load_project(args.config)
     if project.source_root is None:
         print("source 미설정 — originals 를 직접 스캔했으므로 복사할 것이 없습니다.")
         return 0
-    entries = scan_entries(project, args.only)
-    if not entries:
-        print("스캔 결과 없음 — 먼저 jaguk scan")
-        return 1
+    files_map = load_scan(project)
     copied = kept = missing = 0
-    for entry in entries:
-        relative = entry["file"]
+    for relative, lines in sorted(files_map.items()):
+        if not lines:
+            continue
+        if args.only and args.only.lower() not in relative.lower():
+            continue
         src = project.source_root / Path(*relative.split("/"))
         dst = project.original_root / Path(*relative.split("/"))
         if not src.exists():
@@ -283,12 +276,13 @@ def resolve_rule_key(project: Project, target: str) -> str:
         relative = resolved.relative_to(texts).as_posix()
     except ValueError:
         sys.exit(f"set 대상은 텍스트 디렉토리({texts}) 안이어야 합니다: {resolved}")
-    if not resolved.exists():
-        sys.exit(f"대상이 없습니다 (먼저 jaguk scan): {resolved}")
-    if resolved.is_file():
-        if not relative.endswith(".json"):
-            sys.exit(f"파일 대상은 스캔 텍스트 JSON 이어야 합니다: {relative}")
+    if relative.endswith(".json"):       # 구세대 파일별 텍스트 JSON 표기 허용
         relative = relative[:-len(".json")]
+    # 실재 검사는 scan 목록으로 — texts 에는 파일이 실제로 없다
+    files_map = load_scan(project)
+    if relative not in files_map and not any(
+            f.startswith(relative.rstrip("/") + "/") for f in files_map):
+        sys.exit(f"스캔 목록에 없는 대상입니다: {relative} — scan.json 확인")
     return relative
 
 
@@ -489,23 +483,81 @@ def seed_image_only(data: dict, entry: dict, rule_path: str, rule: dict,
     return 1, 0
 
 
+def _rule_vocab(project: Project, dict_file: str) -> list[str]:
+    """규칙의 --dict 파일 → 교정 어휘 (원문 키). load_ocr_dict 와 같은 형식."""
+    path = (project.root / dict_file).resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"규칙 사전 파일이 없습니다: {path}")
+    if path.suffix.lower() == ".txt":
+        return [l.strip() for l in path.read_text(encoding="utf-8-sig").splitlines()
+                if l.strip() and not l.strip().startswith("#")]
+    if path.suffix.lower() == ".json":
+        return list(ledgermod._terms_from_json(path))
+    return list(ledgermod._terms_from_tsv(path))
+
+
 def cmd_extract(args) -> int:
+    """마킹된 규칙대로 **본 OCR 을 다시 돌리고** 원장에 기록한다.
+
+    scan 은 대상 여부만 알므로, 여기서 originals(copy 결과)의 대상 파일을
+    규칙별로 실제 OCR 한다 — ignore 는 OCR 자체를 건너뛰고, 규칙의 --dict
+    는 그 무리에만 교정으로 적용된다.
+    """
     project = load_project(args.config)
-    entries = scan_entries(project, args.only)
-    if not entries:
-        print("스캔 결과 없음 — 먼저 jaguk scan")
-        return 1
+    files_map = load_scan(project)
     data = ledgermod.load(project)
     rules = data.get("rules", {})
 
     counts = {"auto": 0, "image-only": 0, "rows": 0, "ignore": 0}
-    added = skipped = 0
-    auto_entries = []
-    for entry in entries:
-        rule_path, rule = match_rule(rules, entry["file"])
+    plan: list[tuple[str, str, dict, str]] = []   # (rel, rule_path, rule, mode)
+    missing = 0
+    for relative, lines in sorted(files_map.items()):
+        if not lines:
+            continue
+        if args.only and args.only.lower() not in relative.lower():
+            continue
+        rule_path, rule = match_rule(rules, relative)
         mode = rule.get("mode", "auto")
         counts[mode] = counts.get(mode, 0) + 1
         if mode == "ignore":
+            continue
+        if not (project.original_root / Path(*relative.split("/"))).exists():
+            missing += 1
+            continue
+        plan.append((relative, rule_path, rule, mode))
+    if missing:
+        print(f"★ originals 에 없는 대상 {missing}장 건너뜀 — 먼저 jaguk copy")
+    if not plan:
+        print("추출 대상 없음 (전부 ignore/누락?)")
+        return 1
+
+    backend = ocrmod.pick_backend(args.backend or project.ocr_backend)
+    files = [project.original_root / Path(*rel.split("/"))
+             for rel, _, _, _ in plan]
+    print(f"OCR {len(files)}장 ({project.ocr_lang}, {backend}) ...")
+    _, results = ocrmod.run_ocr(project, files, backend=backend)
+
+    vocab = ocrmod.load_ocr_dict(project)
+    if vocab:
+        corrected = ocrmod.correct_results(results, vocab, project.ocr_dict_min)
+        print(f"전역 교정 사전 {len(vocab)}어휘 — {corrected}줄 교정")
+    by_rel = {e["file"]: e for e in results}
+
+    # 규칙별 --dict — 그 무리에만 적용
+    for rule_path in {rp for _, rp, r, _ in plan if r.get("dict")}:
+        rule = rules[rule_path]
+        subset = [by_rel[rel] for rel, rp, _, _ in plan
+                  if rp == rule_path and rel in by_rel]
+        rule_vocab = _rule_vocab(project, rule["dict"])
+        corrected = ocrmod.correct_results(subset, rule_vocab,
+                                           project.ocr_dict_min)
+        print(f"규칙 사전({rule_path}) {len(rule_vocab)}어휘 — {corrected}줄 교정")
+
+    added = skipped = 0
+    auto_entries = []
+    for relative, rule_path, rule, mode in plan:
+        entry = by_rel.get(relative)
+        if entry is None or not entry["lines"]:
             continue
         if mode == "image-only":
             a, s = seed_image_only(data, entry, rule_path, rule, project.ocr_lang)
@@ -522,7 +574,7 @@ def cmd_extract(args) -> int:
     if added:
         ledgermod.save(project, data)
     print(f"처리: auto {counts['auto']}장 / image-only {counts['image-only']}장 / "
-          f"rows {counts['rows']}장 / ignore {counts['ignore']}장")
+          f"rows {counts['rows']}장 / ignore {counts['ignore']}장 (OCR 제외)")
     print(f"원장 기록 {added}건 추가, 기존 {skipped}건 유지 -> {project.ledger_path}")
     return 0
 
@@ -635,8 +687,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--clear", action="store_true", help="규칙 제거")
     p.set_defaults(func=cmd_set)
 
-    p = sub.add_parser("extract", help="스캔 결과를 규칙대로 원장에 기록")
+    p = sub.add_parser("extract",
+                       help="마킹된 파일을 규칙대로 본 OCR 해 원장에 기록")
     p.add_argument("--only", default="")
+    p.add_argument("--backend", default="",
+                   choices=("", "auto", "windows", "tesseract", "easyocr"))
     p.set_defaults(func=cmd_extract)
 
     p = sub.add_parser("erase", help="텍스트 지우기 (→ erased)")
