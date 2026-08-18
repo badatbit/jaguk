@@ -15,6 +15,9 @@ dependencies = [
 [project.optional-dependencies]
 # erase 의 inpaint 방식에만 필요 (없으면 median 방식으로 동작)
 inpaint = ["opencv-python-headless>=4.8"]
+# 리눅스/맥 OCR 백엔드 — tesseract 는 바이너리+언어데이터 별도 설치 필요
+tesseract = ["pytesseract>=0.3.10"]
+easyocr = ["easyocr>=1.7"]
 
 [project.scripts]
 typelet = "typelet.cli:main"

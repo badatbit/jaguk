@@ -33,11 +33,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("directory", nargs="?", default=".",
                    help="프로젝트 디렉토리 (기본: 현재 위치)")
 
-    p = sub.add_parser("extract", help="Windows OCR 추출")
+    p = sub.add_parser("extract", help="OCR 추출")
     p.add_argument("--only", default="", help="상대 경로 부분일치 필터")
     p.add_argument("--seed", action="store_true",
                    help="결과를 원장 씨앗 행으로 추가 (중복은 건너뜀)")
     p.add_argument("--lang", default="", help="OCR 언어 태그 (기본: 설정값)")
+    p.add_argument("--backend", default="",
+                   choices=("", "auto", "windows", "tesseract", "easyocr"),
+                   help="OCR 백엔드 (기본: 설정 ocr_backend, auto=플랫폼 자동)")
     p.add_argument("--out", default="",
                    help="raw JSON 저장 경로 (프로젝트 루트 기준)")
 
@@ -83,7 +86,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "extract":
         from . import ocr
         return ocr.run(project, only=args.only, seed=args.seed,
-                       lang=args.lang or None, out=args.out)
+                       lang=args.lang or None, out=args.out,
+                       backend=args.backend)
     if args.cmd == "erase":
         from . import erase
         return erase.run(project, only=args.only, method=args.method,

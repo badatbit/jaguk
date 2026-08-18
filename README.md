@@ -13,8 +13,18 @@ python -m venv .venv
 .venv\Scripts\pip install -e .[inpaint]
 ```
 
-CLI 는 `typelet` 하나다. Windows OCR(WinRT)을 쓰므로 추출은 Windows 전용이고,
-대상 언어팩(예: 일본어)이 설치돼 있어야 한다. 지우기·렌더는 OS 무관.
+CLI 는 `typelet` 하나다. 지우기·렌더는 OS 무관이고, 추출(OCR)은 백엔드를
+고른다 (`--backend` 또는 설정 `ocr_backend`, 기본 `auto`):
+
+| 백엔드 | 플랫폼 | 준비물 |
+|---|---|---|
+| `windows` | Windows 전용 | OS 언어팩 (설정 > 시간 및 언어 > 언어에서 일본어 추가) |
+| `tesseract` | 어디서나 | `apt install tesseract-ocr tesseract-ocr-jpn` + `pip install .[tesseract]` |
+| `easyocr` | 어디서나 (파이썬만) | `pip install .[easyocr]` — torch 포함이라 무겁다. CPU 만이면 torch 를 먼저 `--index-url https://download.pytorch.org/whl/cpu` 로 |
+
+`auto` 는 win32 면 `windows`, 아니면 `tesseract` → `easyocr` 순서로 있는 것을
+쓴다. 언어는 설정 `ocr_lang` 에 BCP-47("ja")로 적는다 — tesseract 코드("jpn")
+변환은 내부에서 한다. 어느 백엔드든 결과 형태(줄 단위 text + x,y,w,h)는 같다.
 
 ## 워크플로
 

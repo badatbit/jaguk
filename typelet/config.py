@@ -11,7 +11,11 @@
     preview_root    검수 산출물 (boxes 그림, on-original 덧구움)
     font_root       글꼴 파일 디렉토리
     ledger          원장 파일 (스타일 + 행)
-    ocr_lang        Windows OCR 언어 태그 (예: "ja")
+    ocr_lang        OCR 언어 (BCP-47, 예: "ja" — tesseract 코드로는 자동 변환)
+    ocr_backend     "auto" | "windows" | "tesseract" | "easyocr"
+                    (auto = win32 면 windows, 아니면 tesseract → easyocr)
+    ocr_min_conf    easyocr 검출 신뢰도 하한 (0~1, 기본 0.2) — 그림을 글자로
+                    오인한 저신뢰 검출을 거른다
     fonts           {"패밀리/weight": "글꼴파일"} — 파일은 font_root 기준
                     상대 또는 절대 경로
 """
@@ -32,6 +36,8 @@ DEFAULTS = {
     "font_root": "fonts",
     "ledger": "lettering.json",
     "ocr_lang": "ja",
+    "ocr_backend": "auto",
+    "ocr_min_conf": 0.2,
     "fonts": {},
 }
 
@@ -46,6 +52,8 @@ class Project:
     font_root: Path
     ledger_path: Path
     ocr_lang: str
+    ocr_backend: str
+    ocr_min_conf: float
     fonts: dict[str, str]
 
 
@@ -81,6 +89,8 @@ def load(start: Path | None = None) -> Project:
         font_root=_resolve(root, raw["font_root"]),
         ledger_path=_resolve(root, raw["ledger"]),
         ocr_lang=raw["ocr_lang"],
+        ocr_backend=raw["ocr_backend"],
+        ocr_min_conf=float(raw["ocr_min_conf"]),
         fonts=dict(raw["fonts"]),
     )
 
