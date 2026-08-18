@@ -102,6 +102,8 @@ class RowSpec:
     distribute: bool = False                # 글자를 상자 폭에 균등 분배
     flow: list | None = None                # 여러 줄 상자 — 어절 단위 자동 줄바꿈
     ss: int = 1                             # 이 스펙이 몇 배로 스케일됐나 (슈퍼샘플)
+    base: str = ""                          # "blank" = base 파일 없이 투명 캔버스
+    overflow: str = ""                      # "squeeze" = 넘치면 가로만 압축
 
 
 def parse_box(row: dict[str, str], prefix: str, box_id: str,
@@ -225,6 +227,14 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
             f"{box_id}: italic 과 outline 동시 사용은 아직 지원하지 않습니다"
         )
 
+    overflow = (row.get("overflow") or "").strip()
+    if overflow not in ("", "squeeze"):
+        raise ValueError(f"{box_id}: 지원하지 않는 overflow {overflow!r}")
+    if overflow and (vertical or distribute):
+        raise ValueError(
+            f"{box_id}: overflow 는 세로쓰기/균등분배와 함께 쓸 수 없습니다"
+        )
+
     return RowSpec(
         box_id=box_id,
         file=row["file"],
@@ -245,6 +255,8 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
         slant=slant,
         vertical=vertical,
         distribute=distribute,
+        base=(row.get("base") or "").strip(),
+        overflow=overflow,
     )
 
 
@@ -692,6 +704,52 @@ def draw_flow(layer: Image.Image, spec: RowSpec,
                stroke_fill=spec.outline if spec.outline_w else None)
 
 
+def draw_effected(layer: Image.Image, position, spec: RowSpec,
+                  font: ImageFont.FreeTypeFont) -> None:
+    """그림자(있으면) → 글자 — 일반 단독 행의 공통 그리기 경로."""
+    shadow_match = SHADOW_RE.fullmatch(spec.effect)
+    if shadow_match:
+        dx, dy = int(shadow_match.group(1)), int(shadow_match.group(2))
+        blur = float(shadow_match.group(3))
+        color = (
+            parse_rgba8(shadow_match.group(4), spec.box_id)
+            if shadow_match.group(4)
+            else spec.outline
+        )
+        draw_shadow(layer, position, spec, font, dx, dy, blur, color)
+    elif spec.effect not in PLAIN_EFFECTS:
+        raise ValueError(f"{spec.box_id}: 지원하지 않는 effect {spec.effect!r}")
+    draw_plain(layer, position, spec, font)
+
+
+def draw_squeezed(layer: Image.Image, spec: RowSpec, font,
+                  adv: float, top: int, bottom: int) -> None:
+    """넘치는 텍스트를 상자 폭에 맞춰 **가로만** 압축한다 (크기·높이 불변).
+
+    spotname 258장의 검증된 규칙 이식 — 자연 폭(adv)으로 그린 레이어를 상자
+    왼변(bx)을 축으로 s=bw/adv 배 압축한다. 그림자·테두리도 같이 압축된다
+    (원본 spotname 렌더러도 넓은 캔버스째 축소했다).
+    """
+    from dataclasses import replace
+
+    bx, by, bw, bh = spec.box
+    s = bw / adv
+    # 자연 폭 상자 — 폭이 adv 라 정렬 코드와 무관하게 펜이 bx 에서 시작한다
+    wide_spec = replace(spec, box=(bx, by, int(adv) + 1, bh))
+    width = max(layer.width, bx + int(adv) + spec.size)
+    temp = Image.new("RGBA", (width, layer.height), (0, 0, 0, 0))
+    position = pen_and_baseline(wide_spec.box, spec.align, adv, top, bottom)
+    draw_effected(temp, position, wide_spec, font)
+    # 출력 x ← 입력 bx + (x−bx)/s : bx 왼쪽은 항등, 오른쪽은 압축
+    squeezed = temp.transform(
+        layer.size,
+        Image.Transform.AFFINE,
+        (1 / s, 0, bx * (1 - 1 / s), 0, 1, 0),
+        resample=Image.Resampling.BILINEAR,
+    )
+    layer.alpha_composite(squeezed)
+
+
 def render_single(layer: Image.Image, spec: RowSpec,
                   fonts: FontCache) -> None:
     font = fonts.get(spec)
@@ -706,25 +764,18 @@ def render_single(layer: Image.Image, spec: RowSpec,
         return
     top, bottom = metric_bounds(font, spec.outline_w)
     adv = advance(spec.text, font)
-    position = pen_and_baseline(spec.box, spec.align, adv, top, bottom)
 
     rotate_match = ROTATE_RE.fullmatch(spec.effect)
-    shadow_match = SHADOW_RE.fullmatch(spec.effect)
     if rotate_match:
+        if spec.overflow:
+            raise ValueError(f"{spec.box_id}: rotate 와 overflow 는 같이 못 쓴다")
         draw_rotated(layer, spec, font, float(rotate_match.group(1)))
         return
-    if shadow_match:
-        dx, dy = int(shadow_match.group(1)), int(shadow_match.group(2))
-        blur = float(shadow_match.group(3))
-        color = (
-            parse_rgba8(shadow_match.group(4), spec.box_id)
-            if shadow_match.group(4)
-            else spec.outline
-        )
-        draw_shadow(layer, position, spec, font, dx, dy, blur, color)
-    elif spec.effect not in PLAIN_EFFECTS:
-        raise ValueError(f"{spec.box_id}: 지원하지 않는 effect {spec.effect!r}")
-    draw_plain(layer, position, spec, font)
+    if spec.overflow == "squeeze" and adv > spec.box[2]:
+        draw_squeezed(layer, spec, font, adv, top, bottom)
+        return
+    position = pen_and_baseline(spec.box, spec.align, adv, top, bottom)
+    draw_effected(layer, position, spec, font)
 
 
 def render_run(layer: Image.Image, members: list[RowSpec],
@@ -848,14 +899,30 @@ def render_file(
     source_path = safe_path(base_root or project.base_root, relative)
     original_path = safe_path(project.original_root, relative)
     output_path = safe_path(output_root or project.output_root, relative)
-    if not source_path.exists():
-        raise FileNotFoundError(
-            f"베이스가 없습니다: {source_path} — `typelet erase` 로 만들거나 "
-            "손질본을 두세요."
-        )
 
-    source_bytes = source_path.read_bytes()
-    source = Image.open(BytesIO(source_bytes)).convert("RGBA")
+    # blank 베이스 (카탈로그) — 이미지 전체가 글자라 지울 것도 없다.
+    # base 파일 없이 canvas 크기의 투명 캔버스에서 시작한다.
+    bases = {spec.base for spec in specs}
+    blank = "blank" in bases
+    if blank and bases != {"blank"}:
+        raise RuntimeError(f"{relative}: blank 베이스 행과 파일 베이스 행이 섞였습니다")
+    if blank and any(spec.effect == "alpha_clear" for spec in specs):
+        raise ValueError(f"{relative}: blank 베이스에는 alpha_clear 를 쓸 수 없습니다")
+
+    if blank:
+        source_bytes = None
+        source = Image.new("RGBA", specs[0].canvas, (0, 0, 0, 0))
+        # --on-original 이면 blank 대신 원본 위에 덧구워 비교본을 만든다
+        if base_root is not None and original_path.exists():
+            source = Image.open(original_path).convert("RGBA")
+    else:
+        if not source_path.exists():
+            raise FileNotFoundError(
+                f"베이스가 없습니다: {source_path} — `typelet erase` 로 만들거나 "
+                "손질본을 두세요."
+            )
+        source_bytes = source_path.read_bytes()
+        source = Image.open(BytesIO(source_bytes)).convert("RGBA")
 
     original = None
     if any(spec.effect == "alpha_clear" for spec in specs):
@@ -907,7 +974,7 @@ def render_file(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output.save(output_path)
 
-    if sha256(source_path.read_bytes()) != sha256(source_bytes):
+    if source_bytes is not None and sha256(source_path.read_bytes()) != sha256(source_bytes):
         raise RuntimeError(f"베이스 파일이 변경되었습니다: {source_path}")
     return output_path
 

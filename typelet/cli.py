@@ -37,6 +37,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--only", default="", help="상대 경로 부분일치 필터")
     p.add_argument("--seed", action="store_true",
                    help="결과를 원장 씨앗 행으로 추가 (중복은 건너뜀)")
+    p.add_argument("--catalog", default="",
+                   help="이 카탈로그의 entries 로 씨앗 (대상도 카탈로그 dir 로 한정)")
     p.add_argument("--lang", default="", help="OCR 언어 태그 (기본: 설정값)")
     p.add_argument("--backend", default="",
                    choices=("", "auto", "windows", "tesseract", "easyocr"),
@@ -87,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
         from . import ocr
         return ocr.run(project, only=args.only, seed=args.seed,
                        lang=args.lang or None, out=args.out,
-                       backend=args.backend)
+                       backend=args.backend, catalog=args.catalog)
     if args.cmd == "erase":
         from . import erase
         return erase.run(project, only=args.only, method=args.method,
@@ -115,6 +117,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {status:20} {count}")
         untranslated = sum(1 for r in rows if not (r.get("ko") or "").strip())
         print(f"  (ko 비어 있음)       {untranslated}")
+        for cat in ledgermod.catalogs(data):
+            entries = cat.get("entries") or {}
+            counts = Counter(e.get("status", "todo") for e in entries.values())
+            missing = sum(1 for e in entries.values()
+                          if not (e.get("ko") or "").strip())
+            summary = " ".join(f"{k}={v}" for k, v in counts.most_common())
+            print(f"카탈로그 {cat['name']}: {len(entries)}항목  {summary}  "
+                  f"ko비어={missing}")
         return 0
     parser.error(f"알 수 없는 서브커맨드 {args.cmd!r}")
     return 2

@@ -27,6 +27,23 @@
 파일 단위 후처리 목록: {"file", "op", …인자, "note"}. 현재 op 는 overlay
 (무문자 트리의 RGBA 레이어를 글자 위에 알파 합성 — render.apply_post) 하나.
 
+## catalogs (선택, 최상위 키) — 텍스트만 달랑 있는 이미지 묶음
+saveloadspotname 처럼 이미지 전체가 글자 하나인 파일 무리는 행 대신
+카탈로그로 묶는다 — 공통 속성을 한 번만 선언하고 항목은 파일명→번역만 든다:
+
+    {"name":  카탈로그 이름 (box_id 접두, status 집계 단위),
+     "dir":   원본 트리 하위 디렉토리 ("parts/saveloadspotname"),
+     "canvas": [w, h],
+     "base":  "blank" (기본) — base 파일 없이 투명 캔버스에서 렌더.
+              "file" 이면 일반 행처럼 base 트리를 읽는다,
+     "style": 공통 스타일 이름, "text": 공통 text 상자,
+     "overflow": "squeeze" — 넘치면 가로만 압축 (크기·높이 불변),
+     "entries": {"slsn00001.tga.png": {"jp","ko","status", …개별 override}}}
+
+로드 시 expand_catalogs() 가 항목을 가상 행으로 펼친다 (box_id =
+"이름:파일stem"). **가상 행은 원장 파일에 저장되지 않는다** — entries 가
+원본이다. flat_rows() 는 일반 행 + 카탈로그 전개를 함께 돌려준다.
+
 ## 스타일 스키마
 name, label, font_family_ko, font_weight, font_size_px, fill_rgb(#RRGGBB),
 outline_rgb, outline_weight_px, effect, font_style,
@@ -69,6 +86,45 @@ def rows(data: dict) -> list[dict]:
     return data["rows"]
 
 
+def catalogs(data: dict) -> list[dict]:
+    return data.get("catalogs") or []
+
+
+def expand_catalogs(data: dict) -> list[dict]:
+    """카탈로그 항목 → 가상 행. 저장 대상이 아니다 — entries 가 원본이다."""
+    out = []
+    for cat in catalogs(data):
+        name = cat["name"]
+        directory = (cat.get("dir") or "").strip("/")
+        base = cat.get("base", "blank")
+        if base not in ("blank", "file"):
+            raise ValueError(f"카탈로그 {name}: base 는 blank|file 이다: {base!r}")
+        for fname, e in (cat.get("entries") or {}).items():
+            stem = fname.split(".")[0]
+            out.append({
+                "box_id": f"{name}:{stem}",
+                "file": f"{directory}/{fname}" if directory else fname,
+                "element_id": None,
+                "run_id": None,
+                "jp": e.get("jp", ""),
+                "ko": e.get("ko", ""),
+                "ocr_id": None,
+                "crop": None,
+                "text": e.get("text", cat.get("text")),
+                "source": None,
+                "canvas": cat.get("canvas"),
+                "pad": None,
+                "style": e.get("style", cat.get("style", "")),
+                "opacity": e.get("opacity", "FF"),
+                "status": e.get("status", "todo"),
+                "notes": e.get("notes"),
+                "base": base,
+                "overflow": e.get("overflow", cat.get("overflow", "")),
+                "catalog": name,
+            })
+    return out
+
+
 def _s(v) -> str:
     return "" if v is None else str(v)
 
@@ -104,8 +160,12 @@ def flatten_row(r: dict) -> dict:
         "opacity": _s(r.get("opacity")),
         "status": _s(r.get("status")),
         "notes": _s(r.get("notes")),
+        "base": _s(r.get("base")),
+        "overflow": _s(r.get("overflow")),
+        "catalog": _s(r.get("catalog")),
     }
 
 
 def flat_rows(data: dict) -> list[dict]:
-    return [flatten_row(r) for r in rows(data)]
+    """일반 행 + 카탈로그 전개 — 렌더·그림이 보는 전체 목록."""
+    return [flatten_row(r) for r in rows(data) + expand_catalogs(data)]

@@ -68,6 +68,33 @@ effect, text_align, …}`. 상세는 [typelet/ledger.py](typelet/ledger.py) 도�
   4x 슈퍼샘플 AA, alpha_clear · rgb_ink(알파 구운 스프라이트 직접 기록),
   post overlay(선화 레이어 재합성), 비텍스트 영역 불변 검증.
 
+## 카탈로그 — 텍스트만 달랑 있는 이미지 묶음
+
+saveloadspotname 처럼 **이미지 전체가 글자 하나**인 파일 무리는 행 대신
+원장 최상위 `catalogs` 로 묶는다. 공통 style·canvas·text 상자를 한 번만
+선언하고, 항목은 `파일명 → {jp, ko, status}` 만 든다:
+
+```json
+"catalogs": [{
+  "name": "saveloadspotname",
+  "dir": "parts/saveloadspotname",
+  "canvas": [512, 48], "base": "blank",
+  "style": "spotname", "text": [3, 0, 506, 48],
+  "overflow": "squeeze",
+  "entries": {"slsn00001.tga.png": {"jp": "宗谷岬", "ko": "소야곶", "status": "render_ready"}}
+}]
+```
+
+- `base: "blank"` — base 파일 없이 투명 캔버스에서 렌더한다. erase 단계가
+  통째로 필요 없다 (이미지 = 글자 전부라 지우면 아무것도 안 남는다).
+- `overflow: "squeeze"` — 번역이 상자보다 넓으면 **가로만** 압축 (크기·높이
+  불변, spotname 258장의 검증된 규칙).
+- 씨앗: `typelet extract --catalog saveloadspotname` — 카탈로그 dir 의 파일만
+  OCR 해 `파일명 → jp` 로 entries 를 채운다 (기존 항목 유지).
+- `typelet status` 가 카탈로그별로 status·미번역을 집계한다.
+- 렌더·프리뷰에서 카탈로그 항목은 가상 행으로 전개된다 (box_id =
+  `이름:파일stem`). 원장 파일에 저장되는 원본은 entries 뿐이다.
+
 ## 무엇이 여기 없나
 
 원본 이미지를 어디서 가져오고 결과를 어디에 넣는지는 이 도구의 관심사가
