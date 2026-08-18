@@ -83,7 +83,61 @@ def pick_backend(requested: str) -> str:
 
 
 def ocr_windows(root: Path, files: list[Path], lang: str) -> list[dict]:
-    """WinRT OCR — 동봉 winocr.ps1 을 PowerShell 로 실행."""
+    """WinRT OCR — 원본을 그대로 읽은 뒤, 투명하거나 글자가 작은 파일은
+    변형(배경 합성·확대)으로 보강해 병합한다.
+
+    실측(2026-08-19): WinRT 는 raw RGBA 를 자체 방식으로 합성해 흰 글자
+    스프라이트 일부를 놓치고(slsn 69장 — 검정 합성이면 1x 로도 완독),
+    30px 캔버스의 작은 글자(touringspotname 207장)는 크기 미달로 전멸
+    — 2x 확대에서 정확히 읽힌다.
+    """
+    from PIL import Image
+
+    results = _winrt_batch(root, files, lang)
+    by_rel = {e["file"]: e for e in results}
+
+    # 변형 보강 — 변형 파일들을 임시 트리에 만들어 한 번에 배치 OCR
+    tmp = Path(tempfile.mkdtemp(prefix="jaguk_ocr_"))
+    jobs: list[tuple[str, str, int]] = []       # (rel, 변형 파일명, 배율)
+    try:
+        for path in files:
+            rel = path.relative_to(root).as_posix()
+            image = Image.open(path).convert("RGBA")
+            for bg, scale in _variant_specs(image, include_base=False):
+                flat = _flatten(image, bg) if bg else image.convert("RGB")
+                if scale > 1:
+                    flat = flat.resize((flat.width * scale, flat.height * scale),
+                                       Image.LANCZOS)
+                name = f"{len(jobs):06d}.png"
+                flat.save(tmp / name)
+                jobs.append((rel, name, scale))
+        if jobs:
+            variant_results = _winrt_batch(tmp, [tmp / n for _, n, _ in jobs],
+                                           lang)
+            by_name = {e["file"]: e for e in variant_results}
+            for rel, name, scale in jobs:
+                entry = by_name.get(name)
+                if entry is None:
+                    continue
+                merged = by_rel[rel]["lines"]
+                for line in entry["lines"]:
+                    scaled = {
+                        "text": line["text"],
+                        "x": line["x"] // scale, "y": line["y"] // scale,
+                        "w": max(1, line["w"] // scale),
+                        "h": max(1, line["h"] // scale),
+                    }
+                    if not any(_overlaps(scaled, kept) for kept in merged):
+                        merged.append(scaled)
+            for entry in results:
+                entry["lines"].sort(key=lambda l: (l["y"], l["x"]))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return results
+
+
+def _winrt_batch(root: Path, files: list[Path], lang: str) -> list[dict]:
+    """동봉 winocr.ps1 을 PowerShell 로 실행 — 파일 목록 한 번에."""
     with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", suffix=".txt", delete=False
     ) as list_file:
@@ -119,23 +173,39 @@ def _flatten(image, rgb: tuple[int, int, int]):
     return background.convert("RGB")
 
 
-def _variants(path: Path) -> list:
-    """OCR 에 넘길 배경 합성본들.
+def _variant_specs(image, include_base: bool = True
+                   ) -> list[tuple[tuple[int, int, int] | None, int]]:
+    """(배경색|None, 배율) 변형 목록 — 놓친 글자를 줍기 위한 조합.
 
-    투명 배경은 엔진이 임의 색으로 읽으므로 불투명하게 깔아야 하는데, 게임
-    스프라이트는 흰 글자와 어두운 글자가 한 장에 섞여 있다 — 흰 바탕이면 흰
-    글자가, 검은 바탕이면 어두운 글자가 사라진다 (saveloadday 실측: 흰 바탕
-    에서 0줄). 그래서 대체로 투명한 이미지(비율 > 0.5)는 흰·검 두 바탕을
-    다 만들어 각각 OCR 하고 상자가 안 겹치는 검출을 합친다.
+    배경: 투명 배경은 엔진이 임의 색으로 읽으므로 불투명하게 깔아야 하는데,
+    게임 스프라이트는 흰 글자와 어두운 글자가 한 장에 섞여 있다 — 흰 바탕
+    이면 흰 글자가, 검은 바탕이면 어두운 글자가 사라진다. 대체로 투명한
+    이미지(비율 > 0.5)는 흰·검 두 바탕을 다 만든다. None = 합성 없이 RGB.
+
+    배율: 캔버스 높이 ≤ 64px 면 2x, ≤ 32px 면 4x 도 — WinRT 는 작은 글자
+    (touringspotname 30px 캔버스)를 크기 미달로 전멸시키고 2x 에서 읽는다.
+
+    include_base=False 면 (기본 배경, 1x) 조합을 뺀다 — windows 백엔드처럼
+    원본 그대로 읽기가 따로 도는 경우의 보강분만 돌려준다.
     """
     import numpy as np
-    from PIL import Image
-    image = Image.open(path).convert("RGBA")
     alpha_ratio = float((np.asarray(image)[:, :, 3] < 255).mean())
-    variants = [_flatten(image, (255, 255, 255))]
-    if alpha_ratio > 0.5:
-        variants.append(_flatten(image, (0, 0, 0)))
-    return variants
+    if alpha_ratio > 0.05:
+        backgrounds: list = [(255, 255, 255)]
+        if alpha_ratio > 0.5:
+            backgrounds.append((0, 0, 0))
+    else:
+        backgrounds = [None]        # 불투명 — 합성 불필요
+    scales = [1]
+    if image.height <= 64:
+        scales.append(2)
+    if image.height <= 32:
+        scales.append(4)
+    specs = [(bg, s) for s in scales for bg in backgrounds]
+    if not include_base:
+        # 원본 그대로(불투명·1x)와 사실상 같은 조합 제거
+        specs = [(bg, s) for bg, s in specs if not (bg is None and s == 1)]
+    return specs
 
 
 def _overlaps(a: dict, b: dict) -> bool:
@@ -152,12 +222,26 @@ def _overlaps(a: dict, b: dict) -> bool:
 
 
 def _ocr_file(path: Path, ocr_one) -> list[dict]:
-    """한 파일 = 배경 합성본별 OCR 을 겹침 제거로 합친 줄 목록."""
+    """한 파일 = 변형(배경 합성·확대)별 OCR 을 겹침 제거로 합친 줄 목록.
+
+    좌표는 1x 기준으로 되돌린다 — 먼저 잡힌(작은 배율) 검출이 우선."""
+    from PIL import Image
+    image = Image.open(path).convert("RGBA")
     merged: list[dict] = []
-    for image in _variants(path):
-        for line in ocr_one(image):
-            if not any(_overlaps(line, kept) for kept in merged):
-                merged.append(line)
+    for bg, scale in _variant_specs(image):
+        flat = _flatten(image, bg) if bg else image.convert("RGB")
+        if scale > 1:
+            flat = flat.resize((flat.width * scale, flat.height * scale),
+                               Image.LANCZOS)
+        for line in ocr_one(flat):
+            scaled = {
+                "text": line["text"],
+                "x": line["x"] // scale, "y": line["y"] // scale,
+                "w": max(1, line["w"] // scale),
+                "h": max(1, line["h"] // scale),
+            }
+            if not any(_overlaps(scaled, kept) for kept in merged):
+                merged.append(scaled)
     merged.sort(key=lambda l: (l["y"], l["x"]))
     return merged
 
@@ -225,35 +309,34 @@ def ocr_easyocr(root: Path, files: list[Path], lang: str,
 
     reader = easyocr.Reader([lang], verbose=False)
 
-    def make_ocr_one(size):
-        def ocr_one(image) -> list[dict]:
-            lines = []
-            for quad, text, conf in reader.readtext(np.asarray(image)):
-                if conf < min_conf:
-                    continue
-                xs = [p[0] for p in quad]
-                ys = [p[1] for p in quad]
-                # quad 꼭짓점은 이미지 밖(음수)일 수 있다 — 캔버스로 클램프
-                x0 = max(0, int(min(xs)))
-                y0 = max(0, int(min(ys)))
-                x1 = min(size[0], int(max(xs)))
-                y1 = min(size[1], int(max(ys)))
-                if x1 <= x0 or y1 <= y0:
-                    continue
-                lines.append({
-                    "text": text,
-                    "x": x0, "y": y0,
-                    "w": x1 - x0, "h": y1 - y0,
-                })
-            return lines
-        return ocr_one
+    def ocr_one(image) -> list[dict]:
+        lines = []
+        for quad, text, conf in reader.readtext(np.asarray(image)):
+            if conf < min_conf:
+                continue
+            xs = [p[0] for p in quad]
+            ys = [p[1] for p in quad]
+            # quad 꼭짓점은 이미지 밖(음수)일 수 있다 — 캔버스로 클램프
+            # (변형 이미지 자체 크기 기준 — 확대본이면 확대된 크기)
+            x0 = max(0, int(min(xs)))
+            y0 = max(0, int(min(ys)))
+            x1 = min(image.width, int(max(xs)))
+            y1 = min(image.height, int(max(ys)))
+            if x1 <= x0 or y1 <= y0:
+                continue
+            lines.append({
+                "text": text,
+                "x": x0, "y": y0,
+                "w": x1 - x0, "h": y1 - y0,
+            })
+        return lines
 
     results = []
     for path in files:
         from PIL import Image
         with Image.open(path) as image:
             size = image.size
-        lines = _ocr_file(path, make_ocr_one(size))
+        lines = _ocr_file(path, ocr_one)
         results.append({
             "file": path.relative_to(root).as_posix(),
             "width": size[0], "height": size[1],
