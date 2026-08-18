@@ -117,7 +117,13 @@ def main(argv: list[str] | None = None) -> int:
               f"스타일 {len(data.get('styles', []))}개")
         for status, count in by_status.most_common():
             print(f"  {status:20} {count}")
-        untranslated = sum(1 for r in rows if not (r.get("ko") or "").strip())
+        terms = ledgermod.load_terms(project, data)
+        flat = ledgermod.flat_rows(data)
+        if terms:
+            filled, unresolved = ledgermod.apply_terms(flat, terms)
+            print(f"용어표 {len(terms)}종 — 행 {filled}개 해결, "
+                  f"미등록 원문 {len(set(unresolved))}종")
+        untranslated = sum(1 for r in flat if not (r.get("ko_text") or "").strip())
         print(f"  (ko 비어 있음)       {untranslated}")
         for cat in ledgermod.catalogs(data):
             entries = cat.get("entries") or {}

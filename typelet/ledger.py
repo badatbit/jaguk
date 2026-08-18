@@ -47,6 +47,22 @@ saveloadspotname 처럼 이미지 전체가 글자 하나인 파일 무리는 �
 entries 의 개별 항목은 canvas·text·style·opacity·overflow·fit 을 override 할
 수 있다.
 
+## terms (선택, 최상위 키) — 전역 번역 용어표
+같은 원문이 여러 행에 반복될 때(안내판 지명 222종이 1,745행에 등장),
+번역을 행마다 굽지 않고 **ko 가 빈 행은 렌더 때 terms 에서 jp 로 찾는다**.
+번역 수정이 한 곳에서 전판에 반영된다. 값은 소스 목록 (뒤가 앞을 덮는다):
+
+    "terms": ["../furaiki3-l10n/translation/spot.json",
+              {"石狩": "이시카리"}]
+
+소스 = 인라인 dict {"원문": "번역"} 또는 파일 경로(프로젝트 루트 기준).
+파일 형식은 자동 인식:
+    .tsv/.txt   원문<TAB>번역 (# 주석)
+    .json       ① {"원문": "번역"} 평면 맵
+                ② {"원문": {"ko": "번역"}} 중첩 맵 (roadguide_ko.json 꼴)
+                ③ {"names": [{"ja": …, "ko": …, "tr": {"ko": {"status": "ok"}}}]}
+                   레코드 목록 (spot.json 꼴) — status 가 있으면 ok 만 쓴다
+
 로드 시 expand_catalogs() 가 항목을 가상 행으로 펼친다 (box_id =
 "이름:파일stem"). **가상 행은 원장 파일에 저장되지 않는다** — entries 가
 원본이다. flat_rows() 는 일반 행 + 카탈로그 전개를 함께 돌려준다.
@@ -181,3 +197,80 @@ def flatten_row(r: dict) -> dict:
 def flat_rows(data: dict) -> list[dict]:
     """일반 행 + 카탈로그 전개 — 렌더·그림이 보는 전체 목록."""
     return [flatten_row(r) for r in rows(data) + expand_catalogs(data)]
+
+
+# ---- terms (전역 번역 용어표) ------------------------------------------------
+
+def _terms_from_tsv(path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8-sig").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "\t" not in raw:
+            raise ValueError(f"{path}: 탭 구분 원문/번역 쌍이 아닙니다: {line!r}")
+        src, dst = (v.strip() for v in raw.split("\t", 1))
+        if src and dst:
+            out[src] = dst
+    return out
+
+
+def _terms_from_json(path) -> dict[str, str]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and isinstance(data.get("names"), list):
+        # spot.json 꼴 — {"names": [{"ja", "ko", "tr": {"ko": {"status"}}}]}
+        out = {}
+        for rec in data["names"]:
+            src, dst = rec.get("ja"), rec.get("ko")
+            status = (rec.get("tr") or {}).get("ko", {}).get("status")
+            if src and dst and status in (None, "ok"):
+                out[src] = dst
+        return out
+    if isinstance(data, dict):
+        out = {}
+        for src, value in data.items():
+            if isinstance(value, str):                     # 평면 맵
+                out[src] = value
+            elif isinstance(value, dict) and value.get("ko"):   # 중첩 맵
+                out[src] = value["ko"]
+        return out
+    raise ValueError(f"{path}: 지원하지 않는 용어표 JSON 형태")
+
+
+def load_terms(project: Project, data: dict) -> dict[str, str]:
+    """원장 terms 소스들을 병합한 {원문: 번역}. 뒤 소스가 앞을 덮는다."""
+    sources = data.get("terms") or []
+    if isinstance(sources, (str, dict)):
+        sources = [sources]
+    merged: dict[str, str] = {}
+    for source in sources:
+        if isinstance(source, dict):
+            merged.update(source)
+            continue
+        path = (project.root / source).resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"용어표 파일이 없습니다: {path}")
+        if path.suffix.lower() == ".json":
+            merged.update(_terms_from_json(path))
+        else:
+            merged.update(_terms_from_tsv(path))
+    return merged
+
+
+def apply_terms(flat: list[dict], terms: dict[str, str]) -> tuple[int, list[str]]:
+    """ko 가 빈 행에 terms[jp] 를 채운다. (채운 수, 미해결 jp 목록) 반환."""
+    filled = 0
+    unresolved: list[str] = []
+    for row in flat:
+        if (row.get("ko_text") or "").strip():
+            continue
+        jp = (row.get("jp_text") or "").strip()
+        if not jp:
+            continue
+        ko = terms.get(jp)
+        if ko:
+            row["ko_text"] = ko
+            filled += 1
+        else:
+            unresolved.append(jp)
+    return filled, unresolved

@@ -105,6 +105,7 @@ class RowSpec:
     base: str = ""                          # "blank" = base 파일 없이 투명 캔버스
     overflow: str = ""                      # "squeeze" = 넘치면 가로만 압축
     fit: str = ""                           # "original-body" = 원본 실측 재현
+    squeeze_min: float = 0.0                # squeeze 하한 — 그 이상은 넘치게 둔다
 
 
 def parse_box(row: dict[str, str], prefix: str, box_id: str,
@@ -240,6 +241,10 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
             f"{box_id}: overflow 는 세로쓰기/균등분배와 함께 쓸 수 없습니다"
         )
 
+    squeeze_min = float(style.get("squeeze_min") or 0)
+    if not 0 <= squeeze_min < 1:
+        raise ValueError(f"{box_id}: squeeze_min 은 0~1 미만이다: {squeeze_min}")
+
     fit = (row.get("fit") or "").strip()
     if fit not in ("", "original-body"):
         raise ValueError(f"{box_id}: 지원하지 않는 fit {fit!r}")
@@ -274,6 +279,7 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
         base=(row.get("base") or "").strip(),
         overflow=overflow,
         fit=fit,
+        squeeze_min=squeeze_min,
     )
 
 
@@ -806,25 +812,39 @@ def draw_squeezed(layer: Image.Image, spec: RowSpec, font,
                   adv: float, top: int, bottom: int) -> None:
     """넘치는 텍스트를 상자 폭에 맞춰 **가로만** 압축한다 (크기·높이 불변).
 
-    spotname 258장의 검증된 규칙 이식 — 자연 폭(adv)으로 그린 레이어를 상자
-    왼변(bx)을 축으로 s=bw/adv 배 압축한다. 그림자·테두리도 같이 압축된다
-    (원본 spotname 렌더러도 넓은 캔버스째 축소했다).
+    spotname 258장의 검증된 규칙 이식 — 자연 폭(adv)으로 그린 레이어를
+    s=bw/adv 배 압축한다. 그림자·테두리도 같이 압축된다 (원본 spotname
+    렌더러도 넓은 캔버스째 축소했다).
+
+    squeeze_min(스타일)이 있으면 그 밑으로는 압축하지 않는다 — 대신 정렬
+    앵커(l=왼변, m=가운데, r=오른변) 기준으로 상자를 넘치게 둔다
+    (roadguide 의 MIN_SQUEEZE 규칙: 읽을 수 없을 만큼 눌리느니 넘친다).
     """
     from dataclasses import replace
 
     bx, by, bw, bh = spec.box
     s = bw / adv
+    if spec.squeeze_min:
+        s = max(s, spec.squeeze_min)
+    out_w = adv * s
+    h = spec.align[0]
+    if h == "l":
+        left = bx
+    elif h == "m":
+        left = bx + (bw - out_w) / 2
+    else:
+        left = bx + bw - out_w
     # 자연 폭 상자 — 폭이 adv 라 정렬 코드와 무관하게 펜이 bx 에서 시작한다
     wide_spec = replace(spec, box=(bx, by, int(adv) + 1, bh))
     width = max(layer.width, bx + int(adv) + spec.size)
     temp = Image.new("RGBA", (width, layer.height), (0, 0, 0, 0))
     position = pen_and_baseline(wide_spec.box, spec.align, adv, top, bottom)
     draw_effected(temp, position, wide_spec, font)
-    # 출력 x ← 입력 bx + (x−bx)/s : bx 왼쪽은 항등, 오른쪽은 압축
+    # 출력 x ← 입력 bx + (x−left)/s : [bx, bx+adv] 가 [left, left+out_w] 로
     squeezed = temp.transform(
         layer.size,
         Image.Transform.AFFINE,
-        (1 / s, 0, bx * (1 - 1 / s), 0, 1, 0),
+        (1 / s, 0, bx - left / s, 0, 1, 0),
         resample=Image.Resampling.BILINEAR,
     )
     layer.alpha_composite(squeezed)
@@ -1099,6 +1119,20 @@ def run(project: Project, statuses: set[str] | None = None, only: str = "",
     data = ledgermod.load(project)
     styles = ledgermod.styles_map(data)
     all_rows = ledgermod.flat_rows(data)
+
+    # 용어표 — ko 빈 행을 terms[jp] 로 채운다 (행에 안 굽고 렌더 때마다)
+    terms = ledgermod.load_terms(project, data)
+    if terms:
+        ledgermod.apply_terms(all_rows, terms)
+    unresolved = sorted({
+        (r.get("jp_text") or "").strip() for r in all_rows
+        if r.get("status") in statuses and not (r.get("ko_text") or "").strip()
+        and (not only or only.lower() in r.get("file", "").lower())
+    } - {""})
+    if unresolved:
+        print(f"★ 번역 없음 {len(unresolved)}종 (해당 행은 건너뜀): "
+              f"{unresolved[:8]}")
+
     rows = select_rows(all_rows, statuses, only)
     check_runs_complete(rows, all_rows)
 
