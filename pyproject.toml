@@ -21,6 +21,7 @@ easyocr = ["easyocr>=1.7"]
 
 [project.scripts]
 typelet = "typelet.cli:main"
+jaguk = "typelet.jaguk:main"
 
 [tool.setuptools]
 packages = ["typelet"]

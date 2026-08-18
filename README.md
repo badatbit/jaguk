@@ -4,6 +4,40 @@
 furaiki3-l10n 의 `imgtext` 파이프라인에서 이미지 처리 부분만 떼어, 게임 의존성
 (아카이브 덤프/주입, exe 좌표 검증 등) 없이 독립시킨 프로그램이다.
 
+CLI 는 둘이다:
+- **`jaguk`** — 통합 워크플로 CLI (아래 [jaguk](#jaguk--통합-워크플로) 절). 보통 이걸 쓴다.
+- **`typelet`** — 저수준 파이프라인 CLI (원장을 직접 다룰 때).
+
+## jaguk — 통합 워크플로
+
+설정은 **cwd 의 `jaguk.json`** (또는 `-c 파일`). 흐름:
+
+```
+jaguk init [dir] --source <대량원본> --texts texts --base base --out out --lang ja
+jaguk configure dict <용어표.json>      # 번역 용어표 (spot.json 등)
+jaguk configure ocr-dict <어휘.json>    # OCR 교정 사전 — 오독을 어휘에 스냅
+jaguk scan                              # ① 원본에서 텍스트 있는 파일 스캔
+                                        #    → texts/ 에 파일별 텍스트 JSON (구조 유지)
+jaguk copy                              # ② 스캔된 파일만 source → originals 복사
+jaguk set texts/parts/saveloadspotname --image-only --same-pattern
+jaguk set texts/parts/roadguidesign --row 1 ref --row 2 replace --multicolumn
+jaguk set texts/parts/roadsign --ignore
+jaguk read                              # ③ 규칙대로 원장에 기록 (set 없으면 auto)
+jaguk clean [--method fill --color '#0a579d']   # ④ 텍스트 지우기 → base/
+jaguk inject                            # ⑤ 번역 주입 렌더 → out/
+jaguk status
+```
+
+- `set` 대상은 cwd 상대/절대 경로이되 **반드시 texts 디렉토리 안**을
+  가리킨다 (스캔 산출물 = 작업 단위). 파일이면 `<이미지경로>.json`.
+- 규칙 셋: `--image-only`(+`--same-pattern`) = 이미지 전체가 글자 →
+  카탈로그(base 불필요) / `--row N ref|replace`(+`--multicolumn`) = ref 줄은
+  원문 유지·번역 키·앵커, replace 줄은 지우고 그 자리에 주입 (안내판 꼴) /
+  `--ignore` = 제외. 규칙 없는 파일은 auto(행 씨앗).
+- OCR 교정 사전(`ocr-dict`): 알려진 원문 어휘(.txt 한 줄 하나, 또는 용어표
+  파일의 원문 키)와 유사도 ≥ `ocr_dict_min`(기본 0.7)이면 스냅 교정한다.
+  원문 OCR 값은 `"ocr"` 필드에 남는다 (スウェーテン→スウェーデン).
+
 ## 설치
 
 ```

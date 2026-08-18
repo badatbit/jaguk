@@ -52,12 +52,12 @@ TESSERACT_LANGS = {"ja": "jpn", "ko": "kor", "en": "eng",
                    "zh": "chi_sim", "zh-tw": "chi_tra"}
 
 
-def collect_files(project: Project, only: str = "") -> list[Path]:
+def collect_files(root: Path, only: str = "") -> list[Path]:
     files = [
-        p for p in sorted(project.original_root.rglob("*"))
+        p for p in sorted(root.rglob("*"))
         if p.suffix.lower() in IMAGE_SUFFIXES
         and (not only or only.lower()
-             in p.relative_to(project.original_root).as_posix().lower())
+             in p.relative_to(root).as_posix().lower())
     ]
     return files
 
@@ -82,7 +82,7 @@ def pick_backend(requested: str) -> str:
     )
 
 
-def ocr_windows(project: Project, files: list[Path], lang: str) -> list[dict]:
+def ocr_windows(root: Path, files: list[Path], lang: str) -> list[dict]:
     """WinRT OCR — 동봉 winocr.ps1 을 PowerShell 로 실행."""
     with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", suffix=".txt", delete=False
@@ -96,7 +96,7 @@ def ocr_windows(project: Project, files: list[Path], lang: str) -> list[dict]:
                 "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
                 "-File", str(SCRIPT),
                 "-ListPath", str(list_path),
-                "-Root", str(project.original_root),
+                "-Root", str(root),
                 "-OutputPath", str(out_path),
                 "-Lang", lang,
             ],
@@ -162,7 +162,8 @@ def _ocr_file(path: Path, ocr_one) -> list[dict]:
     return merged
 
 
-def ocr_tesseract(project: Project, files: list[Path], lang: str) -> list[dict]:
+def ocr_tesseract(root: Path, files: list[Path], lang: str,
+                  min_conf: float = 0.0) -> list[dict]:
     """pytesseract — image_to_data 의 단어를 (block, par, line) 으로 묶는다."""
     import pytesseract
 
@@ -204,14 +205,15 @@ def ocr_tesseract(project: Project, files: list[Path], lang: str) -> list[dict]:
         with Image.open(path) as image:
             size = image.size
         results.append({
-            "file": path.relative_to(project.original_root).as_posix(),
+            "file": path.relative_to(root).as_posix(),
             "width": size[0], "height": size[1],
             "lines": lines,
         })
     return results
 
 
-def ocr_easyocr(project: Project, files: list[Path], lang: str) -> list[dict]:
+def ocr_easyocr(root: Path, files: list[Path], lang: str,
+                min_conf: float = 0.2) -> list[dict]:
     """EasyOCR — 검출 단위가 대략 줄이라 그대로 한 줄로 쓴다.
 
     신뢰도 하한(설정 ocr_min_conf, 기본 0.2)으로 저신뢰 검출을 거른다 —
@@ -227,7 +229,7 @@ def ocr_easyocr(project: Project, files: list[Path], lang: str) -> list[dict]:
         def ocr_one(image) -> list[dict]:
             lines = []
             for quad, text, conf in reader.readtext(np.asarray(image)):
-                if conf < project.ocr_min_conf:
+                if conf < min_conf:
                     continue
                 xs = [p[0] for p in quad]
                 ys = [p[1] for p in quad]
@@ -253,7 +255,7 @@ def ocr_easyocr(project: Project, files: list[Path], lang: str) -> list[dict]:
             size = image.size
         lines = _ocr_file(path, make_ocr_one(size))
         results.append({
-            "file": path.relative_to(project.original_root).as_posix(),
+            "file": path.relative_to(root).as_posix(),
             "width": size[0], "height": size[1],
             "lines": lines,
         })
@@ -261,17 +263,70 @@ def ocr_easyocr(project: Project, files: list[Path], lang: str) -> list[dict]:
 
 
 def run_ocr(project: Project, files: list[Path], lang: str | None = None,
-            backend: str = "auto") -> tuple[str, list[dict]]:
-    """(실제 쓴 백엔드, 결과) — 결과 형태는 백엔드와 무관하게 같다."""
+            backend: str = "auto", root: Path | None = None
+            ) -> tuple[str, list[dict]]:
+    """(실제 쓴 백엔드, 결과) — 결과 형태는 백엔드와 무관하게 같다.
+
+    root 는 결과 file 키의 기준 트리 (기본: original_root — jaguk scan 은
+    source_root 를 넘긴다).
+    """
     backend = pick_backend(backend)
     lang = lang or project.ocr_lang
+    root = root or project.original_root
     if backend == "windows":
-        return backend, ocr_windows(project, files, lang)
+        return backend, ocr_windows(root, files, lang)
     if backend == "tesseract":
-        return backend, ocr_tesseract(project, files, lang)
+        return backend, ocr_tesseract(root, files, lang)
     if backend == "easyocr":
-        return backend, ocr_easyocr(project, files, lang)
+        return backend, ocr_easyocr(root, files, lang,
+                                    min_conf=project.ocr_min_conf)
     raise ValueError(f"모르는 OCR 백엔드: {backend!r}")
+
+
+def load_ocr_dict(project: Project) -> list[str]:
+    """OCR 교정 사전 — 알려진 원문 어휘 목록.
+
+    .txt = 한 줄 하나(# 주석), 그 외는 용어표 형식(json/tsv)에서 원문 키만
+    쓴다 — spot.json 을 그대로 사전으로 쓸 수 있다.
+    """
+    vocab: dict[str, None] = {}          # 순서 보존 중복 제거
+    for source in project.ocr_dict:
+        path = (project.root / source).resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"OCR 사전 파일이 없습니다: {path}")
+        if path.suffix.lower() == ".txt":
+            for raw in path.read_text(encoding="utf-8-sig").splitlines():
+                line = raw.strip()
+                if line and not line.startswith("#"):
+                    vocab[line] = None
+        else:
+            from . import ledger as _ledger
+            if path.suffix.lower() == ".json":
+                terms = _ledger._terms_from_json(path)
+            else:
+                terms = _ledger._terms_from_tsv(path)
+            for key in terms:
+                vocab[key] = None
+    return list(vocab)
+
+
+def correct_results(results: list[dict], vocab: list[str],
+                    min_ratio: float) -> int:
+    """OCR 줄 텍스트를 사전 어휘에 스냅 교정한다 (원문은 line["ocr"] 에 남김)."""
+    import difflib
+    vocab_set = set(vocab)
+    changed = 0
+    for entry in results:
+        for line in entry["lines"]:
+            text = line["text"]
+            if not text or text in vocab_set:
+                continue
+            best = difflib.get_close_matches(text, vocab, n=1, cutoff=min_ratio)
+            if best and best[0] != text:
+                line["ocr"] = text
+                line["text"] = best[0]
+                changed += 1
+    return changed
 
 
 def _id_prefix(relative: str) -> str:
@@ -284,6 +339,14 @@ def _id_prefix(relative: str) -> str:
 def seed_ledger(project: Project, results: list[dict]) -> tuple[int, int]:
     """OCR 결과를 원장 씨앗 행으로. (추가, 건너뜀) 개수를 돌려준다."""
     data = ledgermod.load(project)
+    added, skipped = seed_rows(data, results)
+    if added:
+        ledgermod.save(project, data)
+    return added, skipped
+
+
+def seed_rows(data: dict, results: list[dict]) -> tuple[int, int]:
+    """OCR 결과 → 원장 데이터에 씨앗 행 추가 (저장은 호출자 몫)."""
     rows = ledgermod.rows(data)
     existing_ids = {r.get("box_id") for r in rows}
     existing_boxes = {
@@ -332,8 +395,6 @@ def seed_ledger(project: Project, results: list[dict]) -> tuple[int, int]:
                 "notes": "OCR seed",
             })
             added += 1
-    if added:
-        ledgermod.save(project, data)
     return added, skipped
 
 
@@ -381,13 +442,18 @@ def run(project: Project, only: str = "", seed: bool = False,
             return 2
         # 카탈로그 디렉토리로 대상 한정
         only = only or (cats[catalog].get("dir") or "").strip("/")
-    files = collect_files(project, only)
+    files = collect_files(project.original_root, only)
     if not files:
         print(f"원본 이미지 없음: {project.original_root} (only={only!r})")
         return 1
     backend = pick_backend(backend or project.ocr_backend)
     print(f"OCR {len(files)}장 ({lang or project.ocr_lang}, {backend}) ...")
     _, results = run_ocr(project, files, lang, backend)
+
+    vocab = load_ocr_dict(project)
+    if vocab:
+        corrected = correct_results(results, vocab, project.ocr_dict_min)
+        print(f"교정 사전 {len(vocab)}어휘 — {corrected}줄 교정")
 
     total_lines = sum(len(e["lines"]) for e in results)
     for entry in results:
