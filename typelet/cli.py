@@ -49,7 +49,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("erase", help="무문자 베이스 생성 (→ base)")
     p.add_argument("--only", default="")
     p.add_argument("--method", default="auto",
-                   choices=("auto", "inpaint", "median", "alpha"))
+                   choices=("auto", "inpaint", "median", "alpha", "fill"))
+    p.add_argument("--color", default="",
+                   help="fill 방식의 채움색 #RRGGBB (예: 안내판 #0a579d)")
     p.add_argument("--pad", type=int, default=2, help="상자 여백 px (기본 2)")
     p.add_argument("--force", action="store_true",
                    help="이미 있는 베이스(손질본일 수 있음)도 덮어쓴다")
@@ -93,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "erase":
         from . import erase
         return erase.run(project, only=args.only, method=args.method,
-                         pad=args.pad, force=args.force)
+                         pad=args.pad, force=args.force, color=args.color)
     if args.cmd == "render":
         from . import render
         return render.run(

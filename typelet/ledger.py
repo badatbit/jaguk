@@ -33,12 +33,19 @@ saveloadspotname 처럼 이미지 전체가 글자 하나인 파일 무리는 �
 
     {"name":  카탈로그 이름 (box_id 접두, status 집계 단위),
      "dir":   원본 트리 하위 디렉토리 ("parts/saveloadspotname"),
-     "canvas": [w, h],
+     "canvas": [w, h] 또는 "original" (원본 이미지 크기 — 장마다 다를 때),
      "base":  "blank" (기본) — base 파일 없이 투명 캔버스에서 렌더.
               "file" 이면 일반 행처럼 base 트리를 읽는다,
      "style": 공통 스타일 이름, "text": 공통 text 상자,
      "overflow": "squeeze" — 넘치면 가로만 압축 (크기·높이 불변),
+     "fit":   "original-body" — 크기·테두리·자리를 원장에 굽지 않고 **원본을
+              실측해 재현**한다 (touringspotname 규칙: 글자 몸통 높이에 맞는
+              최대 크기, 테두리 폭은 잉크 여백에서, 가로 중앙·세로는 원본
+              몸통 상단). 원본 이미지가 필요하다. text 상자·canvas 생략 가능,
      "entries": {"slsn00001.tga.png": {"jp","ko","status", …개별 override}}}
+
+entries 의 개별 항목은 canvas·text·style·opacity·overflow·fit 을 override 할
+수 있다.
 
 로드 시 expand_catalogs() 가 항목을 가상 행으로 펼친다 (box_id =
 "이름:파일stem"). **가상 행은 원장 파일에 저장되지 않는다** — entries 가
@@ -101,6 +108,9 @@ def expand_catalogs(data: dict) -> list[dict]:
             raise ValueError(f"카탈로그 {name}: base 는 blank|file 이다: {base!r}")
         for fname, e in (cat.get("entries") or {}).items():
             stem = fname.split(".")[0]
+            canvas = e.get("canvas", cat.get("canvas"))
+            if canvas == "original":
+                canvas = None       # 렌더러가 원본 크기를 쓴다 (fit 류)
             out.append({
                 "box_id": f"{name}:{stem}",
                 "file": f"{directory}/{fname}" if directory else fname,
@@ -112,7 +122,7 @@ def expand_catalogs(data: dict) -> list[dict]:
                 "crop": None,
                 "text": e.get("text", cat.get("text")),
                 "source": None,
-                "canvas": cat.get("canvas"),
+                "canvas": canvas,
                 "pad": None,
                 "style": e.get("style", cat.get("style", "")),
                 "opacity": e.get("opacity", "FF"),
@@ -120,6 +130,7 @@ def expand_catalogs(data: dict) -> list[dict]:
                 "notes": e.get("notes"),
                 "base": base,
                 "overflow": e.get("overflow", cat.get("overflow", "")),
+                "fit": e.get("fit", cat.get("fit", "")),
                 "catalog": name,
             })
     return out
@@ -162,6 +173,7 @@ def flatten_row(r: dict) -> dict:
         "notes": _s(r.get("notes")),
         "base": _s(r.get("base")),
         "overflow": _s(r.get("overflow")),
+        "fit": _s(r.get("fit")),
         "catalog": _s(r.get("catalog")),
     }
 

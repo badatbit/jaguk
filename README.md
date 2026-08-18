@@ -35,6 +35,7 @@ cd myproject
 typelet extract --seed          # ① 추출 — OCR 로 원문·좌표 → 원장 씨앗 행
 typelet preview                 # 상자 확인 (preview/boxes)
 typelet erase                   # ② 지우기 — 무문자 베이스 생성 (base/)
+#   방식: inpaint(OpenCV)/median/alpha/fill(--color #RRGGBB 단색 채움)
 #   base/ 의 결과를 손봐도 된다 — 재실행해도 --force 없이는 안 덮는다
 # lettering.json 에서 ko·style 을 채우고 status 를 render_ready 로
 typelet render                  # ③ 주입 — base/ + 원장 → out/
@@ -89,6 +90,13 @@ saveloadspotname 처럼 **이미지 전체가 글자 하나**인 파일 무리�
   통째로 필요 없다 (이미지 = 글자 전부라 지우면 아무것도 안 남는다).
 - `overflow: "squeeze"` — 번역이 상자보다 넓으면 **가로만** 압축 (크기·높이
   불변, spotname 258장의 검증된 규칙).
+- `canvas: "original"` — 장마다 크기가 다르면 원본 이미지 크기를 쓴다.
+- `fit: "original-body"` — 크기·테두리·자리를 원장에 굽지 않고 **원본을
+  실측해 재현**한다 (touringspotname 규칙: 몸통 높이에 맞는 최대 크기,
+  테두리 폭은 잉크 여백 실측, 가로 중앙·세로는 몸통 상단). 원본이 필요하고
+  text 상자·canvas·font_size_px 는 생략 가능하다.
+- entries 항목은 canvas·text·style·opacity·overflow·fit 을 개별 override 할
+  수 있다.
 - 씨앗: `typelet extract --catalog saveloadspotname` — 카탈로그 dir 의 파일만
   OCR 해 `파일명 → jp` 로 entries 를 채운다 (기존 항목 유지).
 - `typelet status` 가 카탈로그별로 status·미번역을 집계한다.

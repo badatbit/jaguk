@@ -9,6 +9,8 @@
     median      상자 둘레 고리의 중앙값 색으로 채움 — 단색 배경이면 충분하고
                 의존성이 없다.
     alpha       영역의 알파를 0 으로 — 투명 바탕 스프라이트(글자가 곧 잉크)용.
+    fill        영역을 --color 단색으로 채움 — 안내판처럼 판 색이 정해진 경우
+                (roadguidesign 의 #0a579d 등).
     auto        cv2 가 있으면 inpaint, 없으면 median. (기본)
 
 결과는 base_root 에 같은 상대 경로로 저장한다. **이미 있는 베이스는 손질본일
@@ -93,6 +95,20 @@ def erase_alpha(image: Image.Image, mask: np.ndarray) -> Image.Image:
     return Image.fromarray(arr, "RGBA")
 
 
+def erase_fill(image: Image.Image, mask: np.ndarray,
+               rgb: tuple[int, int, int]) -> Image.Image:
+    arr = np.asarray(image.convert("RGBA")).copy()
+    arr[mask > 0] = (*rgb, 255)
+    return Image.fromarray(arr, "RGBA")
+
+
+def parse_fill_color(value: str) -> tuple[int, int, int]:
+    import re
+    if not re.fullmatch(r"#[0-9A-Fa-f]{6}", value or ""):
+        raise ValueError(f"--color 는 #RRGGBB 형식이어야 합니다: {value!r}")
+    return tuple(int(value[i:i + 2], 16) for i in (1, 3, 5))
+
+
 def _has_cv2() -> bool:
     try:
         import cv2  # noqa: F401
@@ -102,7 +118,7 @@ def _has_cv2() -> bool:
 
 
 def run(project: Project, only: str = "", method: str = "auto",
-        pad: int = 2, force: bool = False) -> int:
+        pad: int = 2, force: bool = False, color: str = "") -> int:
     data = ledgermod.load(project)
     grouped = _rects_by_file(data, only)
     if not grouped:
@@ -116,6 +132,7 @@ def run(project: Project, only: str = "", method: str = "auto",
         print("opencv 가 없습니다 — `pip install type-lettering[inpaint]` "
               "하거나 --method median 을 쓰세요.")
         return 1
+    fill_rgb = parse_fill_color(color) if method == "fill" else None
 
     done = skipped = 0
     for relative, rects in sorted(grouped.items()):
@@ -135,6 +152,9 @@ def run(project: Project, only: str = "", method: str = "auto",
             result = erase_median(image, rects, pad)
         elif method == "alpha":
             result = erase_alpha(image, build_mask(image.size, rects, pad))
+        elif method == "fill":
+            result = erase_fill(image, build_mask(image.size, rects, pad),
+                                fill_rgb)
         else:
             raise ValueError(f"모르는 method: {method!r}")
         dst_path.parent.mkdir(parents=True, exist_ok=True)
