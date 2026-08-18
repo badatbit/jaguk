@@ -362,14 +362,7 @@ def cmd_set(args) -> int:
     return 0
 
 
-def match_rule(rules: dict, relative: str) -> tuple[str, dict]:
-    """가장 구체적인(긴) 경로의 규칙. 없으면 ('', {})."""
-    best_path, best = "", {}
-    for path, rule in rules.items():
-        if relative == path or relative.startswith(path.rstrip("/") + "/"):
-            if len(path) > len(best_path):
-                best_path, best = path, rule
-    return best_path, best
+match_rule = ledgermod.match_rule       # 규칙 매칭 — ledger 모듈이 단일 소스
 
 
 # ---- read (규칙대로 원장 씨앗) ----------------------------------------------
@@ -545,9 +538,7 @@ def cmd_extract(args) -> int:
     for path in targets:
         relative = path.relative_to(project.original_root).as_posix()
         rule_path, rule = match_rule(rules, relative)
-        mode = rule.get("mode", "auto")
-        if mode == "image-only":         # 구 이름 — 기존 원장 규칙 호환
-            mode = "text-only"
+        mode = ledgermod.rule_mode(rule)
         counts[mode] = counts.get(mode, 0) + 1
         if mode == "ignore":
             continue

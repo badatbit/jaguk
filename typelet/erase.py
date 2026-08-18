@@ -31,12 +31,18 @@ from .config import Project
 
 
 def _rects_by_file(data: dict, only: str) -> dict[str, list[tuple[int, int, int, int]]]:
+    rules_map = ledgermod.rules(data)
     grouped: dict[str, list[tuple[int, int, int, int]]] = defaultdict(list)
     for r in ledgermod.rows(data):
         relative = r.get("file") or ""
         if only and only.lower() not in relative.lower():
             continue
         if (r.get("status") or "") == "no_inject":
+            continue
+        # text-only(이미지 전체가 글자 — blank 베이스라 지울 것이 없다)·
+        # ignore 규칙이 걸린 파일은 낡은 행이 남아 있어도 지우지 않는다
+        _, rule = ledgermod.match_rule(rules_map, relative)
+        if ledgermod.rule_mode(rule) in ("text-only", "ignore"):
             continue
         crop = r.get("crop") or {}
         rect = crop.get("rect") or r.get("source")

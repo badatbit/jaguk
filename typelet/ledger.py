@@ -199,6 +199,28 @@ def flat_rows(data: dict) -> list[dict]:
     return [flatten_row(r) for r in rows(data) + expand_catalogs(data)]
 
 
+# ---- rules (jaguk set 이 기록하는 파일/디렉토리 처리 규칙) -------------------
+
+def rules(data: dict) -> dict:
+    return data.get("rules") or {}
+
+
+def match_rule(rules_map: dict, relative: str) -> tuple[str, dict]:
+    """가장 구체적인(긴) 경로의 규칙. 없으면 ('', {})."""
+    best_path, best = "", {}
+    for path, rule in rules_map.items():
+        if relative == path or relative.startswith(path.rstrip("/") + "/"):
+            if len(path) > len(best_path):
+                best_path, best = path, rule
+    return best_path, best
+
+
+def rule_mode(rule: dict) -> str:
+    """규칙 mode (구 이름 image-only 는 text-only 로 정규화)."""
+    mode = rule.get("mode", "auto")
+    return "text-only" if mode == "image-only" else mode
+
+
 # ---- terms (전역 번역 용어표) ------------------------------------------------
 
 def _terms_from_tsv(path) -> dict[str, str]:
