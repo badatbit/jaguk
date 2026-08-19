@@ -85,7 +85,7 @@
     <input type="color" id="bgColor" value="#3c5a82" hidden
            oninput="pickBg(this.value)">
     <button onclick="setZoom(zoom/2)">−</button>
-    <button onclick="setZoom(1)">1x</button>
+    <button onclick="setZoom(1)" title="이미지 1px = 화면(디바이스) 1px">1x</button>
     <button onclick="setZoom(zoom*2)">＋</button>
   </span>
 </header>
@@ -240,10 +240,11 @@ function pickBg(value) { bgCustom = value; bgIndex = 3; applyBg(); }
 function boxDiv(cls, rect, label, onclick) {
   const [x, y, w, h] = rect;
   const div = el("div", "box " + cls);
-  div.style.left = x * zoom + "px";
-  div.style.top = y * zoom + "px";
-  div.style.width = Math.max(1, w * zoom) + "px";
-  div.style.height = Math.max(1, h * zoom) + "px";
+  const s = pxScale();
+  div.style.left = x * s + "px";
+  div.style.top = y * s + "px";
+  div.style.width = Math.max(1, w * s) + "px";
+  div.style.height = Math.max(1, h * s) + "px";
   if (label) {
     const tag = el("span", "tag", label);
     div.appendChild(tag);
@@ -265,7 +266,7 @@ function rowRect(row, prefix) {
 function imgEl(kind) {
   const img = document.createElement("img");
   img.src = "/img/" + kind + "/" + detail.file;
-  img.onload = () => { img.style.width = img.naturalWidth * zoom + "px"; };
+  img.onload = () => { img.style.width = img.naturalWidth * pxScale() + "px"; };
   return img;
 }
 
@@ -431,6 +432,8 @@ function renderProps() {
 renderModes();
 renderBgButtons();
 loadTree();
+// OS 배율·브라우저 줌 변경 시 devicePixelRatio 가 바뀐다 — 픽셀 정합 재계산
+window.addEventListener("resize", () => { if (detail) renderStage(); });
 </script>
 </body>
 </html>
