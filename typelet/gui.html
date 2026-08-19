@@ -406,7 +406,7 @@ function renderBoxList(pane) {
   pane.appendChild(el("h3", "", `상자 목록 (${detail.rows.length}행)`));
   const t = el("table");
   const head = el("tr");
-  for (const h of ["id", "crop", "text", "원문 jp", "번역 ko"]) {
+  for (const h of ["id", "원문 jp", "번역 ko"]) {
     head.appendChild(el("td", "k", h));
   }
   t.appendChild(head);
@@ -417,12 +417,11 @@ function renderBoxList(pane) {
     tr.onmouseleave = () => tr.style.background = "";
     tr.onclick = () => select(row.box_id);
     const ko = row.ko_text || (row._problem ? "⚠" + row._problem : "");
-    const cells = [row.box_id, rectLabel(row, "crop_"),
-                   rectLabel(row, "text_"), row.jp_text || "—", ko];
+    const cells = [row.box_id, row.jp_text || "—", ko];
     cells.forEach((value, index) => {
       const td = el("td", "", value);
-      if (index === 4 && row._problem) td.style.color = "#ff8a7a";
-      if (index === 4 && !row._problem) td.style.color = "var(--accent)";
+      if (index === 2 && row._problem) td.style.color = "#ff8a7a";
+      if (index === 2 && !row._problem) td.style.color = "var(--accent)";
       tr.appendChild(td);
     });
     t.appendChild(tr);
