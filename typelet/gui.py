@@ -144,7 +144,7 @@ def make_handler(project: Project):
     return Handler
 
 
-def run(project: Project, port: int = 8765, open_browser: bool = True) -> int:
+def run(project: Project, port: int = 52485, open_browser: bool = True) -> int:
     server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(project))
     url = f"http://127.0.0.1:{port}/"
     print(f"jaguk gui: {url}  (프로젝트 {project.root}, Ctrl+C 로 종료)")

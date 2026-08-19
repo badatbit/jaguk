@@ -760,7 +760,8 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_status)
 
     p = sub.add_parser("gui", help="검수용 웹 툴 (localhost)")
-    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--port", type=int, default=52485,
+                   help="기본 52485 (전화 키패드 JAGUK)")
     p.add_argument("--no-browser", action="store_true",
                    help="브라우저를 자동으로 열지 않는다")
     p.set_defaults(func=cmd_gui)
