@@ -50,6 +50,8 @@
   .box.err  { border: 1px dashed #ff5340; }
   .box.err .tag { color: #ff8a7a; }
   .box.sel  { outline: 2px solid var(--accent); }
+  .handle { position: absolute; width: 8px; height: 8px; z-index: 5;
+            background: var(--accent); border: 1px solid #0c1420; }
   .box .tag { position: absolute; top: -16px; left: -1px; font-size: 10px;
               background: rgba(0,0,0,.75); padding: 0 4px; white-space: nowrap; }
   #props { width: 420px; overflow-y: auto; background: var(--panel);
@@ -359,7 +361,10 @@ function renderStage() {
       if (src) boxHost.appendChild(boxDiv("src", src, "", () => select(id)));
       if (crop) {
         const div = boxDiv("crop", crop, id, () => select(id));
-        if (selected === id) div.classList.add("sel");
+        if (selected === id) {
+          div.classList.add("sel");
+          addHandles(div, "crop", crop, id);
+        }
         boxHost.appendChild(div);
       }
     }
@@ -372,7 +377,10 @@ function renderStage() {
           : id + " " + (row.style || "");
         const div = boxDiv(problem ? "text err" : "text", text, label,
                            () => select(id));
-        if (selected === id && !overlays["crop-box"]) div.classList.add("sel");
+        if (selected === id) {
+          if (!overlays["crop-box"]) div.classList.add("sel");
+          addHandles(div, "text", text, id);
+        }
         boxHost.appendChild(div);
       }
     }
@@ -458,11 +466,15 @@ async function postOp(url, body) {
   }
 }
 
-async function finishOp(result) {
+async function finishOp(result, keepSelected) {
   const file = detail.file;
-  selected = null;
   editMode = null;
-  await openFile(file, null);
+  await openFile(file, null);           // openFile 이 selected 를 초기화한다
+  if (keepSelected) {
+    selected = keepSelected;
+    renderStage();
+    renderProps();
+  }
   const props = document.getElementById("props");
   props.insertBefore(
     banner(result.ok, (result.ok ? "✅ " : "❌ ") + result.log),
@@ -488,7 +500,8 @@ function renderBoxList(pane) {
   pane.appendChild(toolButton("🔄 박스 지우고 OCR 다시", reextract));
   pane.appendChild(toolButton(
     editMode === "add" ? "➕ 드래그로 상자를 그리세요…" : "➕ 박스 추가",
-    () => { editMode = editMode === "add" ? null : "add"; renderProps(); },
+    () => { editMode = editMode === "add" ? null : "add";
+            renderStage(); renderProps(); },
     editMode === "add"));
   // 파일 선택 직후 — crop/text 상자 목록. 항목 클릭 = 상자 선택
   pane.appendChild(el("h3", "", `상자 목록 (${detail.rows.length}행)`));
@@ -548,7 +561,8 @@ function renderProps() {
   pane.appendChild(toolButton("🗑 지우기", deleteBox));
   pane.appendChild(toolButton(
     editMode === "split" ? "✂ 나눌 위치를 클릭하세요…" : "✂ 나누기",
-    () => { editMode = editMode === "split" ? null : "split"; renderProps(); },
+    () => { editMode = editMode === "split" ? null : "split";
+            renderStage(); renderProps(); },
     editMode === "split"));
 
   if (row._problem) {
@@ -594,6 +608,74 @@ function renderProps() {
     pane.appendChild(table(detail.rule));
   }
 }
+
+// ---- 리사이즈/이동 핸들 (선택된 상자) ----
+let resizing = null;   // {id, key, handle, start, orig, div}
+
+const HANDLE_DEFS = [
+  ["nw", "nwse-resize", 0, 0], ["n", "ns-resize", .5, 0],
+  ["ne", "nesw-resize", 1, 0], ["e", "ew-resize", 1, .5],
+  ["se", "nwse-resize", 1, 1], ["s", "ns-resize", .5, 1],
+  ["sw", "nesw-resize", 0, 1], ["w", "ew-resize", 0, .5]];
+
+function addHandles(div, key, rect, id) {
+  if (editMode) return;                 // add/split 모드 중엔 핸들 비활성
+  for (const [name, cursor, fx, fy] of HANDLE_DEFS) {
+    const h = el("div", "handle");
+    h.style.cursor = cursor;
+    h.style.left = `calc(${fx * 100}% - 4px)`;
+    h.style.top = `calc(${fy * 100}% - 4px)`;
+    h.onmousedown = ev => {
+      ev.stopPropagation();
+      ev.preventDefault();
+      resizing = {id, key, handle: name, start: [ev.clientX, ev.clientY],
+                  orig: rect.slice(), cur: null, div};
+    };
+    div.appendChild(h);
+  }
+  div.style.cursor = "move";            // 본체 드래그 = 이동
+  div.onmousedown = ev => {
+    if (ev.target !== div) return;
+    ev.stopPropagation();
+    ev.preventDefault();
+    resizing = {id, key, handle: "move", start: [ev.clientX, ev.clientY],
+                orig: rect.slice(), cur: null, div};
+  };
+}
+
+window.addEventListener("mousemove", ev => {
+  if (!resizing) return;
+  const s = pxScale();
+  const dx = Math.round((ev.clientX - resizing.start[0]) / s);
+  const dy = Math.round((ev.clientY - resizing.start[1]) / s);
+  let [x, y, w, h] = resizing.orig;
+  const hd = resizing.handle;
+  if (hd === "move") {
+    x += dx; y += dy;
+  } else {
+    if (hd.includes("w")) { x += dx; w -= dx; }
+    if (hd.includes("e")) { w += dx; }
+    if (hd.includes("n")) { y += dy; h -= dy; }
+    if (hd.includes("s")) { h += dy; }
+  }
+  if (w < 2 || h < 2) return;
+  resizing.cur = [x, y, w, h];
+  resizing.div.style.left = x * s + "px";
+  resizing.div.style.top = y * s + "px";
+  resizing.div.style.width = w * s + "px";
+  resizing.div.style.height = h * s + "px";
+});
+
+window.addEventListener("mouseup", () => {
+  if (!resizing) return;
+  const r = resizing;
+  resizing = null;
+  if (!r.cur || String(r.cur) === String(r.orig)) return;
+  busy("상자 저장 중…");
+  postOp("/api/box/update?path=" + encodeURIComponent(detail.file) +
+         "&id=" + encodeURIComponent(r.id),
+         {key: r.key, rect: r.cur}).then(res => finishOp(res, r.id));
+});
 
 // ---- 스테이지 편집 상호작용 (add 드래그 / split 클릭) ----
 const stageEl = document.getElementById("stage");

@@ -386,6 +386,42 @@ def box_add(project: Project, relative: str, rect: list) -> str:
     return f"행 {box_id} 추가 (jp 판독: {jp or '—'})"
 
 
+def box_update(project: Project, relative: str, box_id: str,
+               key: str, rect: list) -> str:
+    """상자 크기/위치 갱신 (GUI 리사이즈 핸들). key = text|crop|source.
+
+    slot 참조 행에 쓰면 행 자체에 override 가 생긴다 — 그 행만 규칙과
+    달라진다는 뜻이며, flat 해석에서 행 값이 우선한다."""
+    if key not in ("text", "crop", "source"):
+        raise ValueError(f"모르는 상자 종류: {key}")
+    rect = [int(v) for v in rect]
+    if rect[2] < 2 or rect[3] < 2:
+        raise ValueError(f"상자가 너무 작습니다: {rect}")
+    data = ledgermod.load(project)
+    for row in ledgermod.rows(data):
+        if row.get("box_id") == box_id and row.get("file") == relative:
+            if key == "crop":
+                crop = row.get("crop") or {"id": None, "src": "manual"}
+                crop["rect"] = rect
+                row["crop"] = crop
+            else:
+                row[key] = rect
+            ledgermod.save(project, data)
+            _INJECT_CACHE.pop(relative, None)
+            return f"{box_id}.{key} = {rect}"
+    for cat in ledgermod.catalogs(data):        # text-only 항목 — text 만
+        prefix = (cat.get("dir") or "").strip("/")
+        for fname, entry in (cat.get("entries") or {}).items():
+            if f"{cat['name']}:{fname.split('.')[0]}" == box_id:
+                if key != "text":
+                    raise ValueError("text-only 항목은 text 상자만 조정 가능")
+                entry["text"] = rect
+                ledgermod.save(project, data)
+                _INJECT_CACHE.pop(relative, None)
+                return f"{box_id}.text = {rect} (entry override)"
+    raise ValueError(f"행을 찾지 못함: {box_id}")
+
+
 def box_split(project: Project, relative: str, box_id: str, at: int) -> str:
     data = ledgermod.load(project)
     rows = ledgermod.rows(data)
@@ -521,6 +557,11 @@ def make_handler(project: Project):
                 elif path == "/api/box/split":
                     at = int(self._body().get("at", 0))
                     self._json({"log": box_split(project, relative, box_id, at)})
+                elif path == "/api/box/update":
+                    body = self._body()
+                    self._json({"log": box_update(project, relative, box_id,
+                                                  body.get("key", "text"),
+                                                  body.get("rect"))})
                 else:
                     self.send_error(404)
             except BrokenPipeError:
