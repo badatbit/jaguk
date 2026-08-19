@@ -422,6 +422,65 @@ def box_update(project: Project, relative: str, box_id: str,
     raise ValueError(f"행을 찾지 못함: {box_id}")
 
 
+def box_reread(project: Project, relative: str, box_id: str) -> str:
+    """이 박스만 원문 재판독 — 상자를 고친 뒤 그 영역의 jp 를 갱신한다.
+
+    영역 = source(없으면 text, slot 참조면 규칙에서 해석). ko 는 보존 —
+    번역이 이미 있으면 jp 만 바뀌었다고 알린다. 교정 사전이 있으면 스냅."""
+    from . import ocr as ocrmod
+    data = ledgermod.load(project)
+    rect = None
+    target_row = next((r for r in ledgermod.rows(data)
+                       if r.get("box_id") == box_id
+                       and r.get("file") == relative), None)
+    if target_row is not None:
+        # 자기 상자를 가진 행만 — slot 참조 행의 합집합 영역을 읽으면
+        # 자간 넓은 원문을 오독한다 (실측: 厚田 → 年月)
+        rect = target_row.get("source") or target_row.get("text")
+        if rect is None:
+            raise ValueError(
+                "slot 참조 행은 재판독 불가 — 상자를 먼저 조정해 행 고유 "
+                "source 를 만들거나, 원장의 jp 를 직접 고치세요")
+    else:
+        flat = next((r for r in ledgermod.flat_rows(data)
+                     if r["box_id"] == box_id and r["file"] == relative), None)
+        if flat is None:
+            raise ValueError(f"행을 찾지 못함: {box_id}")
+        values = [flat.get(f"text_{k}", "") for k in ("x", "y", "w", "h")]
+        if all(v != "" for v in values):
+            rect = [int(v) for v in values]
+    if rect is None:
+        raise ValueError("판독할 영역(source/text)이 없습니다")
+    jp = _read_region(project, relative, rect)
+    if not jp:
+        raise ValueError("판독 결과가 비어 있습니다 (recognizer 설정 확인)")
+    vocab = ocrmod.load_ocr_dict(project)
+    if vocab:
+        fake = [{"file": relative, "lines": [{"text": jp, "x": 0, "y": 0,
+                                              "w": 1, "h": 1}]}]
+        ocrmod.correct_results(fake, vocab, project.ocr_dict_min)
+        jp = fake[0]["lines"][0]["text"]
+
+    for row in ledgermod.rows(data):
+        if row.get("box_id") == box_id and row.get("file") == relative:
+            old = row.get("jp", "")
+            row["jp"] = jp
+            note = " (ko 는 보존 — 번역 확인 필요)" if (row.get("ko") or "").strip() else ""
+            ledgermod.save(project, data)
+            _INJECT_CACHE.pop(relative, None)
+            return f"jp 재판독: {old!r} → {jp!r}{note}"
+    for cat in ledgermod.catalogs(data):
+        prefix = (cat.get("dir") or "").strip("/")
+        for fname, entry in (cat.get("entries") or {}).items():
+            if f"{cat['name']}:{fname.split('.')[0]}" == box_id:
+                old = entry.get("jp", "")
+                entry["jp"] = jp
+                ledgermod.save(project, data)
+                _INJECT_CACHE.pop(relative, None)
+                return f"jp 재판독: {old!r} → {jp!r}"
+    raise ValueError(f"행을 찾지 못함: {box_id}")
+
+
 def box_split(project: Project, relative: str, box_id: str, at: int) -> str:
     data = ledgermod.load(project)
     rows = ledgermod.rows(data)
@@ -562,6 +621,8 @@ def make_handler(project: Project):
                     self._json({"log": box_update(project, relative, box_id,
                                                   body.get("key", "text"),
                                                   body.get("rect"))})
+                elif path == "/api/box/reread":
+                    self._json({"log": box_reread(project, relative, box_id)})
                 else:
                     self.send_error(404)
             except BrokenPipeError:

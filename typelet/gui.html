@@ -559,6 +559,12 @@ function renderProps() {
   back.onclick = () => { selected = null; renderStage(); renderProps(); };
   pane.appendChild(back);
   pane.appendChild(toolButton("🗑 지우기", deleteBox));
+  pane.appendChild(toolButton("🔁 이 박스만 다시 읽기", async () => {
+    const id = selected;
+    busy("재판독 중…");
+    finishOp(await postOp("/api/box/reread?path=" +
+      encodeURIComponent(detail.file) + "&id=" + encodeURIComponent(id)), id);
+  }));
   pane.appendChild(toolButton(
     editMode === "split" ? "✂ 나눌 위치를 클릭하세요…" : "✂ 나누기",
     () => { editMode = editMode === "split" ? null : "split";
@@ -666,15 +672,22 @@ window.addEventListener("mousemove", ev => {
   resizing.div.style.height = h * s + "px";
 });
 
-window.addEventListener("mouseup", () => {
+window.addEventListener("mouseup", async () => {
   if (!resizing) return;
   const r = resizing;
   resizing = null;
   if (!r.cur || String(r.cur) === String(r.orig)) return;
   busy("상자 저장 중…");
-  postOp("/api/box/update?path=" + encodeURIComponent(detail.file) +
-         "&id=" + encodeURIComponent(r.id),
-         {key: r.key, rect: r.cur}).then(res => finishOp(res, r.id));
+  const res = await postOp("/api/box/update?path=" +
+    encodeURIComponent(detail.file) + "&id=" + encodeURIComponent(r.id),
+    {key: r.key, rect: r.cur});
+  // source(원문 영역)를 고쳤으면 그 박스만 자동 재판독 — 변경분만 업데이트
+  if (res.ok && r.key === "source") {
+    const rr = await postOp("/api/box/reread?path=" +
+      encodeURIComponent(detail.file) + "&id=" + encodeURIComponent(r.id));
+    res.log += " · " + rr.log;
+  }
+  finishOp(res, r.id);
 });
 
 // ---- 스테이지 편집 상호작용 (add 드래그 / split 클릭) ----
