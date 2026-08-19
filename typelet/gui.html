@@ -174,12 +174,19 @@ function renderBgButtons() {
   const bar = document.getElementById("bgButtons");
   bar.textContent = "";
   BG_MODES.forEach((name, index) => {
-    const b = el("button", bgIndex === index ? "on" : "", name);
+    // 글자 없는 색 견본 버튼 — 커스텀만 'C'
+    const b = el("button", bgIndex === index ? "on" : "", index === 3 ? "C" : "");
+    b.style.width = "26px";
+    b.style.height = "24px";
+    b.title = `배경: ${name}`;
+    if (index === 0)
+      b.style.background =
+        "repeating-conic-gradient(#3a3d46 0 25%, #23252c 0 50%) 0 0 / 10px 10px";
     if (index === 1) b.style.background = "#000";
-    if (index === 2) { b.style.background = "#fff"; b.style.color = "#333"; }
+    if (index === 2) b.style.background = "#fff";
     if (index === 3) {
       b.style.background = bgCustom;
-      b.title = "클릭: 적용 · 다시 클릭/우클릭: 색 선택";
+      b.title = "배경: 커스텀 — 다시 클릭/우클릭: 색 선택";
       b.oncontextmenu = (ev) => { ev.preventDefault();
         document.getElementById("bgColor").click(); };
     }
