@@ -64,7 +64,9 @@
 <body>
 <header>
   <span class="title">jaguk</span>
-  <span class="modes" id="modes"></span>
+  <span class="modes" id="bases"></span>
+  <span style="color:var(--line)">|</span>
+  <span class="modes" id="overlays"></span>
   <span class="file" id="curfile">파일을 선택하세요</span>
   <span class="zoom">
     <button onclick="setZoom(zoom/1.5)">−</button>
@@ -75,14 +77,14 @@
 <main>
   <nav id="tree">불러오는 중…</nav>
   <section id="view"><div id="stage"></div></section>
-  <aside id="props"><div class="empty">crop-box / text-box 모드에서 상자를
+  <aside id="props"><div class="empty">crop-box / text-box 토글을 켜고 상자를
     클릭하면 속성이 표시됩니다.</div></aside>
 </main>
 <script>
-const MODES = ["원본", "erased", "injected", "crop-box", "text-box"];
-const IMG_KIND = {"원본": "original", "erased": "erased", "injected": "injected",
-                  "crop-box": "original", "text-box": "original"};
-let mode = "원본", detail = null, zoom = 1, selected = null;
+const BASES = {"원본": "original", "erased": "erased", "injected": "injected"};
+let base = "원본";
+let overlays = {"crop-box": false, "text-box": false};   // 베이스와 독립 토글
+let detail = null, zoom = 1, selected = null;
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -126,12 +128,20 @@ async function loadTree() {
 }
 
 function renderModes() {
-  const bar = document.getElementById("modes");
-  bar.textContent = "";
-  for (const m of MODES) {
-    const b = el("button", mode === m ? "on" : "", m);
-    b.onclick = () => { mode = m; renderModes(); renderStage(); };
-    bar.appendChild(b);
+  const baseBar = document.getElementById("bases");
+  baseBar.textContent = "";
+  for (const name of Object.keys(BASES)) {
+    const b = el("button", base === name ? "on" : "", name);
+    b.onclick = () => { base = name; renderModes(); renderStage(); };
+    baseBar.appendChild(b);
+  }
+  const overlayBar = document.getElementById("overlays");
+  overlayBar.textContent = "";
+  for (const name of Object.keys(overlays)) {
+    const b = el("button", overlays[name] ? "on" : "", name);
+    b.onclick = () => { overlays[name] = !overlays[name];
+                        renderModes(); renderStage(); };
+    overlayBar.appendChild(b);
   }
 }
 
@@ -177,20 +187,20 @@ function renderStage() {
   const stage = document.getElementById("stage");
   stage.textContent = "";
   if (!detail) return;
-  const kind = IMG_KIND[mode];
+  const kind = BASES[base];
   if (!detail.images[kind]) {
     stage.appendChild(el("div", "", `(${kind} 이미지 없음)`));
-    return;
+  } else {
+    const img = document.createElement("img");
+    img.src = "/img/" + kind + "/" + detail.file;
+    img.onload = () => { img.style.width = img.naturalWidth * zoom + "px"; };
+    stage.appendChild(img);
   }
-  const img = document.createElement("img");
-  img.src = "/img/" + kind + "/" + detail.file;
-  img.onload = () => { img.style.width = img.naturalWidth * zoom + "px"; };
-  stage.appendChild(img);
 
-  if (mode !== "crop-box" && mode !== "text-box") return;
+  // 상자 오버레이 — 어느 베이스 위에도 겹칠 수 있는 독립 토글
   for (const row of detail.rows) {
     const id = row.box_id;
-    if (mode === "crop-box") {
+    if (overlays["crop-box"]) {
       const crop = rowRect(row, "crop");
       const src = rowRect(row, "source");
       if (src) stage.appendChild(boxDiv("src", src, "", () => select(id)));
@@ -199,12 +209,13 @@ function renderStage() {
         if (selected === id) div.classList.add("sel");
         stage.appendChild(div);
       }
-    } else {
+    }
+    if (overlays["text-box"]) {
       const text = rowRect(row, "text");
       if (text) {
         const div = boxDiv("text", text, id + " " + (row.style || ""),
                            () => select(id));
-        if (selected === id) div.classList.add("sel");
+        if (selected === id && !overlays["crop-box"]) div.classList.add("sel");
         stage.appendChild(div);
       }
     }
@@ -231,7 +242,7 @@ function renderProps() {
   pane.textContent = "";
   if (!detail || !selected) {
     pane.appendChild(el("div", "empty",
-      "crop-box / text-box 모드에서 상자를 클릭하면 속성이 표시됩니다."));
+      "crop-box / text-box 토글을 켜고 상자를 클릭하면 속성이 표시됩니다."));
     return;
   }
   const row = detail.rows.find(r => r.box_id === selected);

@@ -988,17 +988,20 @@ def apply_post(project: Project, source: Image.Image, output: Image.Image,
         output.alpha_composite(layer)
 
 
-def render_file(
+def compose_file(
     project: Project,
     relative: str,
     specs: list[RowSpec],
     base_root: Path | None = None,
-    output_root: Path | None = None,
     posts: list[dict] | None = None,
-) -> Path:
+) -> tuple[Image.Image, Path, bytes | None]:
+    """베이스 + 원장 스펙으로 최종 이미지를 합성한다 (저장은 안 함).
+
+    (합성 결과, 베이스 경로, 베이스 바이트) 를 돌려준다 — 저장 경로에서
+    베이스 불변 검증에 쓴다. GUI 의 즉석 injected 미리보기도 이걸 쓴다.
+    """
     source_path = safe_path(base_root or project.base_root, relative)
     original_path = safe_path(project.original_root, relative)
-    output_path = safe_path(output_root or project.output_root, relative)
 
     # blank 베이스 (카탈로그) — 이미지 전체가 글자라 지울 것도 없다.
     # base 파일 없이 canvas 크기의 투명 캔버스에서 시작한다.
@@ -1084,6 +1087,20 @@ def render_file(
     validate_untouched(source, text_layer, output)
     if posts:
         apply_post(project, source, output, posts)
+    return output, source_path, source_bytes
+
+
+def render_file(
+    project: Project,
+    relative: str,
+    specs: list[RowSpec],
+    base_root: Path | None = None,
+    output_root: Path | None = None,
+    posts: list[dict] | None = None,
+) -> Path:
+    output, source_path, source_bytes = compose_file(
+        project, relative, specs, base_root, posts)
+    output_path = safe_path(output_root or project.output_root, relative)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output.save(output_path)
 

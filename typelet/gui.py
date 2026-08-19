@@ -80,6 +80,10 @@ def build_detail(project: Project, relative: str) -> dict:
     styles = {s["name"]: s for s in data.get("styles", [])}
     images = {kind: (_safe_join(get_root(project), relative) or Path()).exists()
               for kind, get_root in IMAGE_ROOTS.items()}
+    # injected 는 즉석 렌더 — ko(용어표 해석 포함)가 있는 행이 하나라도 있으면
+    # 디스크 산출물 없이도 미리보기가 가능하다
+    images["injected"] = images["injected"] or any(
+        (r.get("ko_text") or "").strip() for r in flat)
     return {
         "file": relative,
         "rows": flat,                    # 평면 행 (카탈로그 전개 포함)
@@ -90,6 +94,51 @@ def build_detail(project: Project, relative: str) -> dict:
         "styles": styles,
         "images": images,
     }
+
+
+def render_injected(project: Project, relative: str) -> bytes | None:
+    """원장 **현재 상태**로 즉석 합성한 injected 미리보기 PNG.
+
+    status 와 무관하게 ko(용어표 해석 포함)가 있고 스타일이 갖춰진 행을
+    전부 렌더한다 — inject 를 돌리기 전에도 결과를 볼 수 있다.
+    합성 불가(스펙 없음·베이스 없음 등)면 None — 호출자가 디스크 산출물로
+    폴백한다.
+    """
+    from io import BytesIO
+
+    from . import render as rendermod
+
+    data = ledgermod.load(project)
+    styles = ledgermod.styles_map(data)
+    flat = [r for r in ledgermod.flat_rows(data) if r["file"] == relative]
+    terms = ledgermod.load_terms(project, data)
+    if terms:
+        ledgermod.apply_terms(flat, terms)
+    flows = {r["box_id"]: r.get("flow") for r in ledgermod.rows(data)
+             if r.get("flow")}
+    specs = []
+    for row in flat:
+        if row.get("status") == "no_inject":
+            continue
+        if not (row.get("ko_text") or "").strip():
+            continue
+        try:
+            spec = rendermod.resolve(row, styles)
+        except rendermod.SkipRow:
+            continue
+        spec.flow = flows.get(spec.box_id)
+        specs.append(spec)
+    if not specs:
+        return None
+    posts = [p for p in data.get("post", []) if p.get("file") == relative]
+    try:
+        output, _, _ = rendermod.compose_file(project, relative, specs,
+                                              posts=posts or None)
+    except Exception:
+        return None
+    buffer = BytesIO()
+    output.save(buffer, "PNG")
+    return buffer.getvalue()
 
 
 def make_handler(project: Project):
@@ -123,14 +172,20 @@ def make_handler(project: Project):
                     self._json(build_detail(project, relative))
                 elif path.startswith("/img/"):
                     _, _, kind, relative = path.split("/", 3)
-                    root_fn = IMAGE_ROOTS.get(kind)
-                    target = root_fn and _safe_join(root_fn(project), relative)
-                    if not target or not target.exists():
-                        self.send_error(404)
-                        return
-                    body = target.read_bytes()
+                    body = None
+                    if kind == "injected":
+                        # 원장 현재 상태로 즉석 렌더 — 실패 시 디스크 폴백
+                        body = render_injected(project, relative)
+                    if body is None:
+                        root_fn = IMAGE_ROOTS.get(kind)
+                        target = root_fn and _safe_join(root_fn(project), relative)
+                        if not target or not target.exists():
+                            self.send_error(404)
+                            return
+                        body = target.read_bytes()
                     self.send_response(200)
                     self.send_header("Content-Type", "image/png")
+                    self.send_header("Cache-Control", "no-store")
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     self.wfile.write(body)
