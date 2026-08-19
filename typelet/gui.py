@@ -78,8 +78,10 @@ def build_detail(project: Project, relative: str) -> dict:
 
     _, rule = ledgermod.match_rule(data.get("rules", {}), relative)
     styles = {s["name"]: s for s in data.get("styles", [])}
-    images = {kind: (_safe_join(get_root(project), relative) or Path()).exists()
-              for kind, get_root in IMAGE_ROOTS.items()}
+    images = {}
+    for kind, get_root in IMAGE_ROOTS.items():
+        target = _safe_join(get_root(project), relative)
+        images[kind] = bool(target and target.exists())
     # injected 는 즉석 렌더 — ko(용어표 해석 포함)가 있는 행이 하나라도 있으면
     # 디스크 산출물 없이도 미리보기가 가능하다
     images["injected"] = images["injected"] or any(
@@ -150,6 +152,7 @@ def make_handler(project: Project):
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -162,6 +165,7 @@ def make_handler(project: Project):
                     body = PAGE.read_bytes()
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     self.wfile.write(body)
