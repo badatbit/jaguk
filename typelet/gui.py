@@ -299,6 +299,142 @@ def reextract(project: Project, relative: str) -> str:
             + buffer.getvalue())
 
 
+# ---- 박스 편집 (GUI 전용) ------------------------------------------------------
+
+def _read_region(project: Project, relative: str, rect: list) -> str:
+    """상자 영역의 원문 판독 — recognizer(manga-ocr)가 켜져 있을 때만."""
+    if project.ocr_recognizer != "manga-ocr":
+        return ""
+    from PIL import Image
+
+    from . import ocr as ocrmod
+    path = _safe_join(project.original_root, relative)
+    if not path or not path.exists():
+        return ""
+    image = Image.open(path).convert("RGBA")
+    pad = 2
+    x, y, w, h = rect
+    crop = image.crop((max(0, x - pad), max(0, y - pad),
+                       min(image.width, x + w + pad),
+                       min(image.height, y + h + pad)))
+    try:
+        return ocrmod._recognize_crop(crop)
+    except Exception:
+        return ""
+
+
+def _alloc_id(existing: set, prefix: str) -> str:
+    import re
+    n = 0
+    for bid in existing:
+        m = re.fullmatch(rf"{re.escape(prefix)}(\d+)", bid or "")
+        if m:
+            n = max(n, int(m.group(1)))
+    while True:
+        n += 1
+        bid = f"{prefix}{n}"
+        if bid not in existing:
+            return bid
+
+
+def box_delete(project: Project, relative: str, box_id: str) -> str:
+    data = ledgermod.load(project)
+    rows = ledgermod.rows(data)
+    for i, row in enumerate(rows):
+        if row.get("box_id") == box_id and row.get("file") == relative:
+            del rows[i]
+            ledgermod.save(project, data)
+            _INJECT_CACHE.pop(relative, None)
+            return f"행 {box_id} 삭제"
+    for cat in ledgermod.catalogs(data):        # text-only 항목 (이름:stem)
+        prefix = (cat.get("dir") or "").strip("/")
+        for fname in list(cat.get("entries") or {}):
+            stem = fname.split(".")[0]
+            if f"{cat['name']}:{stem}" == box_id:
+                del cat["entries"][fname]
+                ledgermod.save(project, data)
+                _INJECT_CACHE.pop(relative, None)
+                return f"text-only 항목 {fname} 삭제"
+    raise ValueError(f"행을 찾지 못함: {box_id}")
+
+
+def box_add(project: Project, relative: str, rect: list) -> str:
+    from PIL import Image
+
+    from . import ocr as ocrmod
+    data = ledgermod.load(project)
+    flat = [r for r in ledgermod.flat_rows(data) if r["file"] == relative]
+    if any(r.get("base") == "blank" for r in flat):
+        raise ValueError("text-only 파일은 entries 로 관리합니다 — 행 추가 불가")
+    path = _safe_join(project.original_root, relative)
+    with Image.open(path) as image:
+        canvas = list(image.size)
+    rows = ledgermod.rows(data)
+    box_id = _alloc_id({r.get("box_id") for r in rows},
+                       ocrmod._id_prefix(relative))
+    jp = _read_region(project, relative, rect)
+    _, rule = ledgermod.match_rule(data.get("rules", {}), relative)
+    rows.append({
+        "box_id": box_id, "file": relative, "element_id": None,
+        "run_id": None, "jp": jp, "ko": "", "ocr_id": None,
+        "crop": None, "text": list(rect), "source": list(rect),
+        "canvas": canvas, "pad": None, "style": rule.get("style", ""),
+        "opacity": "FF", "status": "todo", "notes": "manual",
+    })
+    ledgermod.save(project, data)
+    _INJECT_CACHE.pop(relative, None)
+    return f"행 {box_id} 추가 (jp 판독: {jp or '—'})"
+
+
+def box_split(project: Project, relative: str, box_id: str, at: int) -> str:
+    data = ledgermod.load(project)
+    rows = ledgermod.rows(data)
+    index = next((i for i, r in enumerate(rows)
+                  if r.get("box_id") == box_id and r.get("file") == relative),
+                 None)
+    if index is None:
+        raise ValueError(f"행을 찾지 못함: {box_id} (slot 참조/text-only 는 나누기 불가)")
+    row = rows[index]
+
+    def halves(rect):
+        if not rect:
+            return None, None
+        x, y, w, h = rect
+        cut = max(x + 2, min(at, x + w - 2))
+        return [x, y, cut - x, h], [cut, y, x + w - cut, h]
+
+    text_l, text_r = halves(row.get("text"))
+    source_l, source_r = halves(row.get("source"))
+    crop_rect = (row.get("crop") or {}).get("rect")
+    crop_l, crop_r = halves(crop_rect)
+    if not (text_l or source_l):
+        raise ValueError("나눌 상자(text/source)가 없습니다")
+
+    existing = {r.get("box_id") for r in rows}
+    parts = []
+    for suffix, text, source, crop in (("a", text_l, source_l, crop_l),
+                                       ("b", text_r, source_r, crop_r)):
+        part = dict(row)
+        new_id = f"{box_id}{suffix}"
+        while new_id in existing:
+            new_id += suffix
+        existing.add(new_id)
+        part["box_id"] = new_id
+        part["text"] = text
+        part["source"] = source
+        part["crop"] = ({"id": None, "src": "manual", "rect": crop}
+                        if crop else None)
+        part["jp"] = _read_region(project, relative, source or text) or row.get("jp", "")
+        part["ko"] = ""
+        part["notes"] = "manual split"
+        parts.append(part)
+    rows[index:index + 1] = parts
+    ledgermod.save(project, data)
+    _INJECT_CACHE.pop(relative, None)
+    return (f"{box_id} → {parts[0]['box_id']}({parts[0]['jp'] or '—'}) + "
+            f"{parts[1]['box_id']}({parts[1]['jp'] or '—'})")
+
+
 def make_handler(project: Project):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):     # 콘솔 소음 줄이기
@@ -362,13 +498,29 @@ def make_handler(project: Project):
             except Exception as error:          # 페이지가 오류를 볼 수 있게
                 self._json({"error": str(error)}, status=500)
 
+        def _body(self) -> dict:
+            length = int(self.headers.get("Content-Length") or 0)
+            if not length:
+                return {}
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+
         def do_POST(self):
             url = urlparse(self.path)
+            query = parse_qs(url.query)
+            relative = query.get("path", [""])[0]
+            box_id = query.get("id", [""])[0]
             try:
-                if unquote(url.path) == "/api/reextract":
-                    relative = parse_qs(url.query).get("path", [""])[0]
-                    log = reextract(project, relative)
-                    self._json({"log": log})
+                path = unquote(url.path)
+                if path == "/api/reextract":
+                    self._json({"log": reextract(project, relative)})
+                elif path == "/api/box/delete":
+                    self._json({"log": box_delete(project, relative, box_id)})
+                elif path == "/api/box/add":
+                    rect = self._body().get("rect")
+                    self._json({"log": box_add(project, relative, rect)})
+                elif path == "/api/box/split":
+                    at = int(self._body().get("at", 0))
+                    self._json({"log": box_split(project, relative, box_id, at)})
                 else:
                     self.send_error(404)
             except BrokenPipeError:

@@ -440,12 +440,54 @@ async function reextract() {
   props.insertBefore(head, props.firstChild);
 }
 
+// ---- 박스 편집 ----
+let editMode = null;    // null | "add" | "split"
+
+async function postOp(url, body) {
+  try {
+    const res = await fetch(url, {method: "POST",
+      headers: body ? {"Content-Type": "application/json"} : undefined,
+      body: body ? JSON.stringify(body) : undefined});
+    const data = await res.json().catch(() => ({}));
+    return {ok: res.ok && data.log !== undefined,
+            log: data.log || data.error || ("HTTP " + res.status)};
+  } catch (error) {
+    return {ok: false, log: String(error) + " — 서버 재시작 필요할 수 있음"};
+  }
+}
+
+async function finishOp(result) {
+  const file = detail.file;
+  selected = null;
+  editMode = null;
+  await openFile(file, null);
+  const props = document.getElementById("props");
+  props.insertBefore(
+    banner(result.ok, (result.ok ? "✅ " : "❌ ") + result.log),
+    props.firstChild);
+}
+
+async function deleteBox() {
+  if (!selected || !confirm(`${selected} 상자를 지울까요?`)) return;
+  finishOp(await postOp("/api/box/delete?path=" +
+    encodeURIComponent(detail.file) + "&id=" + encodeURIComponent(selected)));
+}
+
+function toolButton(label, onclick, active) {
+  const b = el("button", active ? "on" : "", label);
+  b.style.cssText = "margin:0 6px 8px 0;background:none;border:1px solid " +
+    (active ? "var(--accent)" : "var(--line)") +
+    ";color:var(--fg);padding:3px 10px;cursor:pointer";
+  b.onclick = onclick;
+  return b;
+}
+
 function renderBoxList(pane) {
-  const btn = el("button", "", "🔄 박스 지우고 OCR 다시");
-  btn.style.cssText = "margin-bottom:8px;background:none;border:1px solid " +
-                      "var(--line);color:var(--fg);padding:3px 10px;cursor:pointer";
-  btn.onclick = reextract;
-  pane.appendChild(btn);
+  pane.appendChild(toolButton("🔄 박스 지우고 OCR 다시", reextract));
+  pane.appendChild(toolButton(
+    editMode === "add" ? "➕ 드래그로 상자를 그리세요…" : "➕ 박스 추가",
+    () => { editMode = editMode === "add" ? null : "add"; renderProps(); },
+    editMode === "add"));
   // 파일 선택 직후 — crop/text 상자 목록. 항목 클릭 = 상자 선택
   pane.appendChild(el("h3", "", `상자 목록 (${detail.rows.length}행)`));
   const t = el("table");
@@ -497,10 +539,15 @@ function renderProps() {
   if (!row) return;
 
   const back = el("button", "", "← 목록");
-  back.style.cssText = "margin-bottom:8px;background:none;border:1px solid " +
+  back.style.cssText = "margin:0 6px 8px 0;background:none;border:1px solid " +
                        "var(--line);color:var(--dim);padding:2px 8px;cursor:pointer";
   back.onclick = () => { selected = null; renderStage(); renderProps(); };
   pane.appendChild(back);
+  pane.appendChild(toolButton("🗑 지우기", deleteBox));
+  pane.appendChild(toolButton(
+    editMode === "split" ? "✂ 나눌 위치를 클릭하세요…" : "✂ 나누기",
+    () => { editMode = editMode === "split" ? null : "split"; renderProps(); },
+    editMode === "split"));
 
   if (row._problem) {
     const banner = el("div", "", "⚠ " + row._problem);
@@ -545,6 +592,61 @@ function renderProps() {
     pane.appendChild(table(detail.rule));
   }
 }
+
+// ---- 스테이지 편집 상호작용 (add 드래그 / split 클릭) ----
+const stageEl = document.getElementById("stage");
+let dragStart = null, dragDiv = null;
+
+function stagePos(ev) {
+  const r = stageEl.getBoundingClientRect();
+  const s = pxScale();
+  return [Math.round((ev.clientX - r.left) / s),
+          Math.round((ev.clientY - r.top) / s)];
+}
+
+stageEl.addEventListener("mousedown", ev => {
+  if (editMode !== "add" || !detail) return;
+  ev.preventDefault();
+  dragStart = stagePos(ev);
+  dragDiv = el("div", "box text");
+  dragDiv.style.borderColor = "var(--accent)";
+  stageEl.appendChild(dragDiv);
+});
+
+stageEl.addEventListener("mousemove", ev => {
+  if (!dragDiv) return;
+  const [x, y] = stagePos(ev);
+  const s = pxScale();
+  const rx = Math.min(dragStart[0], x), ry = Math.min(dragStart[1], y);
+  dragDiv.style.left = rx * s + "px";
+  dragDiv.style.top = ry * s + "px";
+  dragDiv.style.width = Math.abs(x - dragStart[0]) * s + "px";
+  dragDiv.style.height = Math.abs(y - dragStart[1]) * s + "px";
+});
+
+stageEl.addEventListener("mouseup", async ev => {
+  if (!dragDiv) return;
+  const [x, y] = stagePos(ev);
+  const rect = [Math.min(dragStart[0], x), Math.min(dragStart[1], y),
+                Math.abs(x - dragStart[0]), Math.abs(y - dragStart[1])];
+  dragDiv.remove();
+  dragDiv = null;
+  dragStart = null;
+  if (rect[2] < 3 || rect[3] < 3) return;      // 너무 작으면 취소
+  finishOp(await postOp("/api/box/add?path=" +
+    encodeURIComponent(detail.file), {rect}));
+});
+
+// split — 캡처 단계에서 가로챈다 (상자 자체의 클릭 핸들러보다 먼저)
+stageEl.addEventListener("click", async ev => {
+  if (editMode !== "split" || !selected || !detail) return;
+  ev.stopPropagation();
+  ev.preventDefault();
+  const [x] = stagePos(ev);
+  finishOp(await postOp("/api/box/split?path=" +
+    encodeURIComponent(detail.file) + "&id=" + encodeURIComponent(selected),
+    {at: x}));
+}, true);
 
 renderModes();
 renderBgButtons();
