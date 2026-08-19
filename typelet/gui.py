@@ -87,13 +87,13 @@ def build_detail(project: Project, relative: str) -> dict:
     # blank 베이스(text-only)의 erased 는 공백 이미지로 즉석 생성된다
     images["erased"] = images["erased"] or any(
         r.get("base") == "blank" for r in flat)
-    # injected 는 번역문이 없어도 베이스만으로라도 생성한다 — 행이 있으면 가능
-    images["injected"] = images["injected"] or bool(flat) and (
-        images["erased"] or any((r.get("ko_text") or "").strip() for r in flat))
+    # injected 는 항상 생성한다 — erased 없으면 원본 덧구움, 스펙 없으면
+    # 베이스/원본 그대로. 원본조차 없을 때만 못 보여준다
+    images["injected"] = images["injected"] or images["original"] \
+        or images["erased"]
     injected_reason = None
     if not images["injected"]:
-        injected_reason = ("erased 베이스 없음 — jaguk erase 필요"
-                           if flat else "원장 데이터가 없음 (행/카탈로그 항목 없음)")
+        injected_reason = "원본/베이스 이미지가 없음"
 
     # 행별 문제 진단 — 개별 text 상자에 에러로 표시된다
     from . import render as rendermod
@@ -205,30 +205,41 @@ def render_injected(project: Project, relative: str) -> bytes | None:
             continue
         spec.flow = flows.get(spec.box_id)
         specs.append(spec)
+    def store(body: bytes | None) -> bytes | None:
+        if body is not None:
+            _INJECT_CACHE[relative] = (cache_key, body)
+        return body
+
     if not specs:
-        # 번역문이 하나도 없어도 injected 는 생성 — 지워진 베이스 그대로.
-        # 문제는 개별 text 상자의 에러 표시가 알린다.
+        # 번역문이 하나도 없어도 injected 는 생성 — 지워진 베이스 그대로,
+        # 그것도 없으면 원본 그대로. 문제는 개별 text 상자 에러가 알린다.
         blank = render_blank(project, relative)
         if blank is not None:
-            _INJECT_CACHE[relative] = (cache_key, blank)
-            return blank
-        erased = _safe_join(project.base_root, relative)
-        if erased and erased.exists():
-            body = erased.read_bytes()
-            _INJECT_CACHE[relative] = (cache_key, body)
-            return body
+            return store(blank)
+        for root in (project.base_root, project.original_root):
+            path = _safe_join(root, relative)
+            if path and path.exists():
+                return store(path.read_bytes())
         return None
+
     posts = [p for p in data.get("post", []) if p.get("file") == relative]
+    output = None
     try:
         output, _, _ = rendermod.compose_file(project, relative, specs,
                                               posts=posts or None)
+    except FileNotFoundError:
+        # erased 베이스가 아직 없으면 원본 위 덧구움으로 미리보기
+        try:
+            output, _, _ = rendermod.compose_file(
+                project, relative, specs,
+                base_root=project.original_root, posts=posts or None)
+        except Exception:
+            return None
     except Exception:
         return None
     buffer = BytesIO()
     output.save(buffer, "PNG")
-    body = buffer.getvalue()
-    _INJECT_CACHE[relative] = (cache_key, body)
-    return body
+    return store(buffer.getvalue())
 
 
 def make_handler(project: Project):

@@ -84,9 +84,9 @@
     <span class="modes" id="bgButtons"></span>
     <input type="color" id="bgColor" value="#3c5a82" hidden
            oninput="pickBg(this.value)">
-    <button onclick="setZoom(zoom/1.5)">−</button>
+    <button onclick="setZoom(zoom/2)">−</button>
     <button onclick="setZoom(1)">1x</button>
-    <button onclick="setZoom(zoom*1.5)">＋</button>
+    <button onclick="setZoom(zoom*2)">＋</button>
   </span>
 </header>
 <main>
@@ -187,6 +187,11 @@ async function openFile(file, item) {
 
 function setZoom(z) { zoom = Math.min(8, Math.max(0.25, z)); renderStage(); }
 
+// 픽셀 정합: OS 배율(DPI)·브라우저 줌이 있으면 CSS 1px ≠ 디바이스 1px 이라
+// 이미지가 비정수 배로 리샘플된다. devicePixelRatio 로 나눠 zoom 1x 에서
+// 이미지 1px = 디바이스 1px 이 되게 한다 (줌 단계도 2배수라 항상 정수 배).
+function pxScale() { return zoom / window.devicePixelRatio; }
+
 const CHECKER =
   "repeating-conic-gradient(#202228 0 25%, #191b20 0 50%) 0 0 / 24px 24px";
 // 배경 버튼 4개: 투명(체커) / 검정 / 흰색 / 커스텀(피커)
@@ -267,7 +272,12 @@ function imgEl(kind) {
 function missingEl(kind) {
   const reason = kind === "injected" && detail.injected_reason
     ? detail.injected_reason : `(${kind} 이미지 없음)`;
-  return el("div", "", reason);
+  const div = el("div", "", reason);
+  // 비교 레이아웃에서 구석에 찌그러지지 않게 패널 형태로
+  div.style.cssText = "min-width:180px;padding:14px;background:var(--panel);" +
+                      "border:1px solid var(--line);color:var(--dim);" +
+                      "white-space:nowrap";
+  return div;
 }
 
 function imgOrMissing(kind) {
