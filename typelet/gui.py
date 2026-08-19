@@ -84,8 +84,13 @@ def build_detail(project: Project, relative: str) -> dict:
         images[kind] = bool(target and target.exists())
     # injected 는 즉석 렌더 — ko(용어표 해석 포함)가 있는 행이 하나라도 있으면
     # 디스크 산출물 없이도 미리보기가 가능하다
-    images["injected"] = images["injected"] or any(
-        (r.get("ko_text") or "").strip() for r in flat)
+    has_translation = any((r.get("ko_text") or "").strip() for r in flat)
+    images["injected"] = images["injected"] or has_translation
+    # 못 보여주는 이유 — 이미지가 없는 게 아니라 데이터 문제임을 구분한다
+    injected_reason = None
+    if not images["injected"]:
+        injected_reason = ("번역 데이터가 없음 (ko 비어 있고 용어표 미해석)"
+                           if flat else "원장 데이터가 없음 (행/카탈로그 항목 없음)")
     return {
         "file": relative,
         "rows": flat,                    # 평면 행 (카탈로그 전개 포함)
@@ -95,6 +100,7 @@ def build_detail(project: Project, relative: str) -> dict:
         "rule": rule,
         "styles": styles,
         "images": images,
+        "injected_reason": injected_reason,
     }
 
 

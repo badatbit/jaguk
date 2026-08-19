@@ -192,7 +192,9 @@ function renderStage() {
   if (!detail) return;
   const kind = BASES[base];
   if (!detail.images[kind]) {
-    stage.appendChild(el("div", "", `(${kind} 이미지 없음)`));
+    const reason = kind === "injected" && detail.injected_reason
+      ? detail.injected_reason : `(${kind} 이미지 없음)`;
+    stage.appendChild(el("div", "", reason));
   } else {
     const img = document.createElement("img");
     img.src = "/img/" + kind + "/" + detail.file;
