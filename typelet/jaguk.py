@@ -19,6 +19,8 @@
                   --multicolumn           한 줄에 여러 항목 (열별 짝짓기)
                   --ignore                처리 제외
                   --dict FILE             이 무리의 번역 용어표
+                  --apply                 이미 extract 된 원장 데이터에 소급
+                                          적용 (행→카탈로그 변환·정리·스타일)
     extract     마킹된 파일을 규칙대로 **본 OCR** 해 원장에 기록
                 (set 없으면 auto = 행 씨앗, ignore 는 OCR 도 안 함)
     erase       텍스트 지우기 — 무문자 베이스 생성
@@ -357,13 +359,97 @@ def cmd_set(args) -> int:
         if rule["dict"] not in terms:
             terms.append(rule["dict"])
         data["terms"] = terms
-    if not rule:
+    if not rule and not args.apply:
         print(f"규칙 {key}: {json.dumps(rules.get(key, {}), ensure_ascii=False)}")
         return 0
-    rules[key] = rule
+    if rule:
+        rules[key] = rule
+        print(f"규칙 저장: {key} = {json.dumps(rule, ensure_ascii=False)}")
+    if args.apply:
+        apply_rule(project, data, key, rules.get(key, {}))
     ledgermod.save(project, data)
-    print(f"규칙 저장: {key} = {json.dumps(rule, ensure_ascii=False)}")
     return 0
+
+
+def apply_rule(project: Project, data: dict, key: str, rule: dict) -> None:
+    """규칙을 **이미 extract 된 원장 데이터**에 소급 적용한다 (set --apply).
+
+    ignore     대상 경로의 행·카탈로그 항목을 제거
+    text-only  대상 경로의 행을 카탈로그 항목으로 변환 (행의 jp 를 합쳐
+               entry.jp 로, 행은 제거 — 재-extract 없이 전환)
+    rows       자동 씨앗 행(OCR seed)을 제거 — 짝짓기가 필요하므로 이후
+               extract 재실행 안내
+    --style    남는 대상 행들에 스타일 부여
+    """
+    mode = ledgermod.rule_mode(rule)
+
+    def under(relative: str) -> bool:
+        return relative == key or relative.startswith(key.rstrip("/") + "/")
+
+    rows = ledgermod.rows(data)
+    targets = [r for r in rows if under(r.get("file", ""))]
+
+    if mode == "ignore":
+        data["rows"] = [r for r in rows if not under(r.get("file", ""))]
+        removed_entries = 0
+        for cat in ledgermod.catalogs(data):
+            prefix = (cat.get("dir") or "").strip("/")
+            entries = cat.get("entries") or {}
+            drop = [f for f in entries if under(f"{prefix}/{f}" if prefix else f)]
+            for fname in drop:
+                del entries[fname]
+            removed_entries += len(drop)
+        print(f"적용(ignore): 행 {len(targets)}개·카탈로그 항목 "
+              f"{removed_entries}개 제거")
+        return
+
+    if mode == "text-only":
+        joiner = "" if (project.ocr_lang or "").lower().startswith(("ja", "zh")) \
+            else " "
+        by_file: dict[str, list[dict]] = {}
+        for r in targets:
+            by_file.setdefault(r["file"], []).append(r)
+        converted = skipped = 0
+        for relative, file_rows in sorted(by_file.items()):
+            def pos(r):
+                box = r.get("source") or r.get("text") or [0, 0, 0, 0]
+                return (box[1], box[0])
+            lines = [{"text": (r.get("jp") or "").strip(),
+                      "x": (r.get("source") or r.get("text") or [0, 0, 1, 1])[0],
+                      "y": (r.get("source") or r.get("text") or [0, 0, 1, 1])[1],
+                      "w": (r.get("source") or r.get("text") or [0, 0, 1, 1])[2],
+                      "h": (r.get("source") or r.get("text") or [0, 0, 1, 1])[3]}
+                     for r in sorted(file_rows, key=pos)
+                     if (r.get("jp") or "").strip()]
+            canvas = next((r.get("canvas") for r in file_rows
+                           if r.get("canvas")), [0, 0])
+            entry = {"file": relative, "width": canvas[0], "height": canvas[1],
+                     "lines": lines}
+            a, s = seed_text_only(data, entry, key, rule, project.ocr_lang)
+            converted += a
+            skipped += s
+        data["rows"] = [r for r in rows if not under(r.get("file", ""))]
+        print(f"적용(text-only): 행 {len(targets)}개 → 카탈로그 항목 "
+              f"{converted}개 변환 (기존 항목 {skipped}개 유지)")
+        return
+
+    if mode == "rows":
+        seeds = [r for r in targets if r.get("notes", "").startswith(("OCR seed",))]
+        data["rows"] = [r for r in rows
+                        if not (under(r.get("file", ""))
+                                and r.get("notes", "").startswith(("OCR seed",)))]
+        print(f"적용(rows): 자동 씨앗 행 {len(seeds)}개 제거 — 짝짓기가 "
+              f"필요하니 `jaguk extract --only {key}` 로 다시 뽑으세요")
+        targets = [r for r in data["rows"] if under(r.get("file", ""))]
+
+    if rule.get("style"):
+        styled = 0
+        for r in targets:
+            if r.get("style") != rule["style"]:
+                r["style"] = rule["style"]
+                styled += 1
+        if styled:
+            print(f"적용(style): 행 {styled}개에 스타일 {rule['style']!r} 부여")
 
 
 match_rule = ledgermod.match_rule       # 규칙 매칭 — ledger 모듈이 단일 소스
@@ -730,6 +816,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--ignore", action="store_true", help="처리 제외")
     p.add_argument("--dict", default="", help="이 무리의 번역 용어표 파일")
     p.add_argument("--style", default="", help="적용할 스타일 이름")
+    p.add_argument("--apply", action="store_true",
+                   help="규칙을 이미 extract 된 원장 데이터에 소급 적용 — "
+                        "행→카탈로그 변환(text-only), 정리(ignore), 스타일 부여")
     p.add_argument("--clear", action="store_true", help="규칙 제거")
     p.set_defaults(func=cmd_set)
 
