@@ -394,16 +394,64 @@ function table(obj, skipEmpty = true) {
   return t;
 }
 
+function rectLabel(row, prefix, wh) {
+  const ks = wh ? [prefix+"x", prefix+"y", prefix+wh[0], prefix+wh[1]]
+               : [prefix+"x", prefix+"y", prefix+"w", prefix+"h"];
+  const v = ks.map(k => row[k]);
+  return v.every(x => x !== "") ? `${v[0]},${v[1]} ${v[2]}×${v[3]}` : "—";
+}
+
+function renderBoxList(pane) {
+  // 파일 선택 직후 — crop/text 상자 목록. 항목 클릭 = 상자 선택
+  pane.appendChild(el("h3", "", `상자 목록 (${detail.rows.length}행)`));
+  const t = el("table");
+  const head = el("tr");
+  for (const h of ["id", "crop", "text", "내용"]) {
+    const td = el("td", "k", h);
+    td.style.width = "";
+    head.appendChild(td);
+  }
+  t.appendChild(head);
+  for (const row of detail.rows) {
+    const tr = el("tr");
+    tr.style.cursor = "pointer";
+    tr.onmouseenter = () => tr.style.background = "#262a33";
+    tr.onmouseleave = () => tr.style.background = "";
+    tr.onclick = () => select(row.box_id);
+    const content = row._problem
+      ? "⚠" + row._problem
+      : (row.ko_text || row.jp_text || "");
+    for (const value of [row.box_id, rectLabel(row, "crop_"),
+                         rectLabel(row, "text_"), content]) {
+      const td = el("td", "", value);
+      if (row._problem && value === content) td.style.color = "#ff8a7a";
+      tr.appendChild(td);
+    }
+    t.appendChild(tr);
+  }
+  pane.appendChild(t);
+}
+
 function renderProps() {
   const pane = document.getElementById("props");
   pane.textContent = "";
-  if (!detail || !selected) {
-    pane.appendChild(el("div", "empty",
-      "crop-box / text-box 토글을 켜고 상자를 클릭하면 속성이 표시됩니다."));
+  if (!detail) {
+    pane.appendChild(el("div", "empty", "파일을 선택하세요."));
+    return;
+  }
+  if (!selected) {
+    if (detail.rows.length) renderBoxList(pane);
+    else pane.appendChild(el("div", "empty", "이 파일에는 행이 없습니다."));
     return;
   }
   const row = detail.rows.find(r => r.box_id === selected);
   if (!row) return;
+
+  const back = el("button", "", "← 목록");
+  back.style.cssText = "margin-bottom:8px;background:none;border:1px solid " +
+                       "var(--line);color:var(--dim);padding:2px 8px;cursor:pointer";
+  back.onclick = () => { selected = null; renderStage(); renderProps(); };
+  pane.appendChild(back);
 
   if (row._problem) {
     const banner = el("div", "", "⚠ " + row._problem);
