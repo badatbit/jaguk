@@ -401,21 +401,43 @@ function rectLabel(row, prefix, wh) {
   return v.every(x => x !== "") ? `${v[0]},${v[1]} ${v[2]}×${v[3]}` : "—";
 }
 
+function banner(ok, text) {
+  const div = el("div", "", text);
+  div.style.cssText = ok
+    ? "background:#1e3a26;border:1px solid #3fb950;color:#7ee787;" +
+      "padding:8px 10px;margin-bottom:8px"
+    : "background:#4a2320;border:1px solid #ff5340;color:#ff8a7a;" +
+      "padding:8px 10px;margin-bottom:8px";
+  return div;
+}
+
 async function reextract() {
   if (!detail) return;
-  if (!confirm(`${detail.file}\n\n이 파일의 상자(ko 미입력)를 지우고 OCR 을 ` +
+  const file = detail.file;
+  if (!confirm(`${file}\n\n이 파일의 상자(ko 미입력)를 지우고 OCR 을 ` +
                `다시 돌립니다. 계속할까요?`)) return;
   const pane = document.getElementById("props");
   pane.textContent = "";
   pane.appendChild(el("div", "empty", "재추출 중… (판독 모델 첫 로드 시 수십 초)"));
-  const res = await fetch("/api/reextract?path=" +
-                          encodeURIComponent(detail.file), {method: "POST"});
-  const body = await res.json();
-  await openFile(detail.file, null);
-  const log = el("pre", "", body.log || body.error || "");
-  log.style.cssText = "white-space:pre-wrap;color:var(--dim);font-size:11px;" +
-                      "border:1px solid var(--line);padding:6px;margin-top:8px";
-  document.getElementById("props").appendChild(log);
+  let ok = false, log = "";
+  try {
+    const res = await fetch("/api/reextract?path=" + encodeURIComponent(file),
+                            {method: "POST"});
+    const body = await res.json().catch(() => ({}));
+    ok = res.ok && body.log !== undefined;
+    log = body.log || body.error ||
+          `HTTP ${res.status} — 서버가 옛 코드일 수 있습니다 (jaguk gui 재시작)`;
+  } catch (error) {
+    log = "요청 실패: " + error + " — 서버 재시작(jaguk gui) 후 다시 시도하세요";
+  }
+  await openFile(file, null);
+  const head = banner(ok, ok ? `✅ 재추출 완료 — ${file}` : `❌ 재추출 실패 — ${file}`);
+  const pre = el("pre", "", log);
+  pre.style.cssText = "white-space:pre-wrap;color:var(--dim);font-size:11px;" +
+                      "border:1px solid var(--line);padding:6px;margin:0 0 10px";
+  const props = document.getElementById("props");
+  props.insertBefore(pre, props.firstChild);
+  props.insertBefore(head, props.firstChild);
 }
 
 function renderBoxList(pane) {
