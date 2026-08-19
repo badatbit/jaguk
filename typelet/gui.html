@@ -72,9 +72,11 @@
   <span class="modes" id="overlays"></span>
   <span style="color:var(--line)">|</span>
   <span class="modes" id="compare"></span>
-  <input type="range" id="alphaSlider" min="0" max="100" value="50"
-         style="width:70px;display:none" title="injected 불투명도"
-         oninput="overlayAlpha=this.value/100; renderStage()">
+  <input type="range" id="alphaSlider" min="0" max="100" value="100"
+         style="width:70px;display:none" title="injected 불투명도 — 왼쪽으로 끌면 원본이 비친다"
+         oninput="overlayAlpha=this.value/100;
+                  const t=document.getElementById('overlayTop');
+                  if (t) t.style.opacity=overlayAlpha;">
   <span class="file" id="curfile">파일을 선택하세요</span>
   <span class="zoom">
     <span class="modes" id="bgButtons"></span>
@@ -97,7 +99,7 @@ let base = "원본";
 let overlays = {"crop-box": false, "text-box": false};   // 베이스와 독립 토글
 // 비교 보기: "" 단독 | "overlay" 겹침 | "v" 상하 | "h" 좌우 (원본 + injected)
 const COMPARE = {"겹침": "overlay", "상하": "v", "좌우": "h"};
-let compare = "", overlayAlpha = 0.5;
+let compare = "", overlayAlpha = 1.0;   // 겹침 기본 = injected 전면 (100%)
 let detail = null, zoom = 1, selected = null;
 
 function el(tag, cls, text) {
@@ -292,6 +294,7 @@ function renderStage() {
     stage.appendChild(imgOrMissing("original"));
     if (detail.images.injected) {
       const top = imgEl("injected");
+      top.id = "overlayTop";
       top.style.position = "absolute";
       top.style.left = "0";
       top.style.top = "0";

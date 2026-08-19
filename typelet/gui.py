@@ -138,6 +138,20 @@ def render_blank(project: Project, relative: str) -> bytes | None:
     return buffer.getvalue()
 
 
+# 즉석 렌더 캐시 — 원장/베이스/원본이 안 바뀌었으면 재합성하지 않는다
+# (겹침 보기 등에서 같은 이미지를 연속 요청할 때 1~3초 재렌더 방지)
+_INJECT_CACHE: dict[str, tuple[tuple, bytes]] = {}
+
+
+def _inject_cache_key(project: Project, relative: str) -> tuple:
+    parts = []
+    for path in (project.ledger_path,
+                 _safe_join(project.base_root, relative),
+                 _safe_join(project.original_root, relative)):
+        parts.append(path.stat().st_mtime_ns if path and path.exists() else 0)
+    return tuple(parts)
+
+
 def render_injected(project: Project, relative: str) -> bytes | None:
     """원장 **현재 상태**로 즉석 합성한 injected 미리보기 PNG.
 
@@ -149,6 +163,11 @@ def render_injected(project: Project, relative: str) -> bytes | None:
     from io import BytesIO
 
     from . import render as rendermod
+
+    cache_key = _inject_cache_key(project, relative)
+    cached = _INJECT_CACHE.get(relative)
+    if cached and cached[0] == cache_key:
+        return cached[1]
 
     data = ledgermod.load(project)
     styles = ledgermod.styles_map(data)
@@ -180,7 +199,9 @@ def render_injected(project: Project, relative: str) -> bytes | None:
         return None
     buffer = BytesIO()
     output.save(buffer, "PNG")
-    return buffer.getvalue()
+    body = buffer.getvalue()
+    _INJECT_CACHE[relative] = (cache_key, body)
+    return body
 
 
 def make_handler(project: Project):
