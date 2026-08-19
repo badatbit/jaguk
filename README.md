@@ -104,6 +104,9 @@ furaiki3-l10n 의 `image_text.json` 과 같은 스키마다 — 그대로 복사
 effect, text_align, …}`. 상세는 [typelet/ledger.py](typelet/ledger.py) 도크스트링.
 
 - `text` 상자는 **좌상단 기준**이고 상자 안 정렬은 스타일 `text_align` 이 정한다.
+- 같은 패턴이 반복되는 무리는 스타일에 `crop_size`([w,h])와 `pad`({l,t,r,b})를
+  두면 행에는 **crop 위치 [x,y]만** 남는다 — crop 크기는 스타일이, text 상자는
+  crop+pad 파생 (예: 15×3 메뉴 그리드 45행이 위치 2개 값씩만 가진다).
 - `status` 가 `render_ready` 인 행만 렌더된다. OCR 씨앗 행은 `todo` 로 들어온다.
 - 렌더러 기능: run(한 상자 여러 스타일 이어 그리기), flow(어절 단위 자동
   줄바꿈), 세로쓰기, 균등 분배, drop_shadow / rotate / italic(전단) 효과,

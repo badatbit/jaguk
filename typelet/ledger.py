@@ -73,6 +73,12 @@ outline_rgb, outline_weight_px, effect, font_style,
 text_align(가로 l/m/r + 세로 t/m/b), orientation("vertical"=세로쓰기),
 distribute(글자 균등 분배), offset_x/offset_y(그리기 원점 이동 px).
 
+같은 패턴이 반복되는 무리용 (행에는 crop 위치만 남는다):
+    crop_size  [w, h] — crop 상자 크기. 행의 crop rect 를 [x, y] 두 값만
+               적으면 크기는 스타일이 채운다
+    pad        {"l","t","r","b"} — text 상자 = crop + pad 파생 (행에 text
+               가 없을 때). 행 pad 가 있으면 그것이 우선
+
 ## flat_rows()
 평면 문자열 dict 를 돌려준다 — 렌더·그림 코드가 쓰는 호환층.
 """
@@ -169,7 +175,7 @@ def _s(v) -> str:
 def flatten_row(r: dict) -> dict:
     """구조형 행 → 평면 문자열 dict."""
     crop = r.get("crop") or {}
-    rect = crop.get("rect") or [None] * 4
+    rect = (list(crop.get("rect") or []) + [None] * 4)[:4]   # [x,y]만도 허용
     text = r.get("text") or [None] * 4
     src = r.get("source") or [None] * 4
     canvas = r.get("canvas") or [None, None]
@@ -213,6 +219,7 @@ def flat_rows(data: dict) -> list[dict]:
     위치의 단일 소스는 규칙이다 (set --unify-boxes --apply 가 만든다).
     """
     rules_map = rules(data)
+    styles_by_name = {s.get("name"): s for s in data.get("styles", [])}
     out = []
     for r in rows(data) + expand_catalogs(data):
         flat = flatten_row(r)
@@ -237,6 +244,27 @@ def flat_rows(data: dict) -> list[dict]:
                     x, y, w, h = spec["source"]
                     flat["source_x"], flat["source_y"] = str(x), str(y)
                     flat["source_box_w"], flat["source_box_h"] = str(w), str(h)
+        # 스타일 파생 — 같은 패턴이 반복되는 무리는 행에 crop 위치만 남긴다:
+        # ① crop 크기 = 스타일 crop_size (행 crop 은 [x,y] 만)
+        # ② text 상자 = crop + pad (행 pad 우선, 없으면 스타일 pad)
+        style = styles_by_name.get((r.get("style") or "").strip())
+        if style:
+            crop_rect = (r.get("crop") or {}).get("rect")
+            if crop_rect and len(crop_rect) == 2 and style.get("crop_size"):
+                w, h = style["crop_size"]
+                flat["crop_x"], flat["crop_y"] = str(crop_rect[0]), str(crop_rect[1])
+                flat["crop_w"], flat["crop_h"] = str(w), str(h)
+            pad = r.get("pad") or style.get("pad")
+            if pad and flat["text_x"] == "" and flat["crop_x"] != "":
+                cx, cy = int(flat["crop_x"]), int(flat["crop_y"])
+                cw, ch = int(flat["crop_w"]), int(flat["crop_h"])
+                left = int(pad.get("l", 0))
+                top = int(pad.get("t", 0))
+                right = int(pad.get("r", 0))
+                bottom = int(pad.get("b", 0))
+                flat["text_x"], flat["text_y"] = str(cx + left), str(cy + top)
+                flat["text_w"] = str(cw - left - right)
+                flat["text_h"] = str(ch - top - bottom)
         out.append(flat)
     return out
 
