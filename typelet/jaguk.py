@@ -233,7 +233,7 @@ def _cmd_scan_impl(args) -> int:      # 보존 — 재활성화 대비
     if not files:
         print(f"스캔할 이미지 없음: {root} (only={args.only!r})")
         return 1
-    backend = ocrmod.pick_backend(args.backend or project.ocr_backend)
+    backend = ocrmod.pick_backend(backend or project.ocr_backend)
     print(f"스캔 {len(files)}장 ({project.ocr_lang}, {backend}) — {root}")
     _, results = ocrmod.run_ocr(project, files, backend=backend, root=root)
 
@@ -709,17 +709,21 @@ def _rule_vocab(project: Project, dict_file: str) -> list[str]:
 
 
 def cmd_extract(args) -> int:
+    project = load_project(args.config)
+    return run_extract(project, only=args.only, backend=args.backend)
+
+
+def run_extract(project: Project, only: str = "", backend: str = "") -> int:
     """마킹된 규칙대로 **본 OCR 을 다시 돌리고** 원장에 기록한다.
 
     대상은 originals 트리 전수다 (scan 비활성 — OCR 필터링이 파일을 놓치는
     위험이 절감보다 크다). ignore 규칙은 OCR 자체를 건너뛰고, 규칙의
-    --dict 는 그 무리에만 교정으로 적용된다.
+    --dict 는 그 무리에만 교정으로 적용된다. GUI 의 재추출 버튼도 이걸 쓴다.
     """
-    project = load_project(args.config)
     data = ledgermod.load(project)
     rules = data.get("rules", {})
 
-    targets = ocrmod.collect_files(project.original_root, args.only)
+    targets = ocrmod.collect_files(project.original_root, only)
     if not targets:
         print(f"originals 에 이미지가 없습니다: {project.original_root} — "
               "원본 트리를 직접 두세요 (scan/copy 는 비활성).")
@@ -739,7 +743,7 @@ def cmd_extract(args) -> int:
         print("추출 대상 없음 (전부 ignore?)")
         return 1
 
-    backend = ocrmod.pick_backend(args.backend or project.ocr_backend)
+    backend = ocrmod.pick_backend(backend or project.ocr_backend)
     files = [project.original_root / Path(*rel.split("/"))
              for rel, _, _, _ in plan]
     recognizer = f" 탐지 + {project.ocr_recognizer} 판독" \

@@ -256,6 +256,49 @@ def render_injected(project: Project, relative: str) -> bytes | None:
     return store(buffer.getvalue())
 
 
+def reextract(project: Project, relative: str) -> str:
+    """이 파일의 상자를 지우고 현행 OCR 스택으로 재추출 (GUI 버튼).
+
+    **ko 가 입력된 행/항목은 보존한다** — 사람이 넣은 번역을 잃지 않도록.
+    보존된 행의 자리는 중복 판정에 걸려 새 씨앗이 그 위에 덧나지 않는다.
+    """
+    from contextlib import redirect_stdout
+    from io import StringIO
+
+    data = ledgermod.load(project)
+    removed = kept = 0
+    new_rows = []
+    for row in ledgermod.rows(data):
+        if row.get("file") == relative and not (row.get("ko") or "").strip():
+            removed += 1
+            continue
+        if row.get("file") == relative:
+            kept += 1
+        new_rows.append(row)
+    data["rows"] = new_rows
+    for cat in ledgermod.catalogs(data):
+        prefix = (cat.get("dir") or "").strip("/")
+        if not (prefix and relative.startswith(prefix + "/")):
+            continue
+        fname = relative[len(prefix) + 1:]
+        entry = (cat.get("entries") or {}).get(fname)
+        if entry is not None:
+            if (entry.get("ko") or "").strip():
+                kept += 1
+            else:
+                del cat["entries"][fname]
+                removed += 1
+    ledgermod.save(project, data)
+    _INJECT_CACHE.pop(relative, None)
+
+    from . import jaguk as jagukmod
+    buffer = StringIO()
+    with redirect_stdout(buffer):
+        jagukmod.run_extract(project, only=relative)
+    return (f"기존 상자 {removed}개 삭제, ko 입력 {kept}개 보존\n"
+            + buffer.getvalue())
+
+
 def make_handler(project: Project):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):     # 콘솔 소음 줄이기
@@ -317,6 +360,20 @@ def make_handler(project: Project):
             except BrokenPipeError:
                 pass
             except Exception as error:          # 페이지가 오류를 볼 수 있게
+                self._json({"error": str(error)}, status=500)
+
+        def do_POST(self):
+            url = urlparse(self.path)
+            try:
+                if unquote(url.path) == "/api/reextract":
+                    relative = parse_qs(url.query).get("path", [""])[0]
+                    log = reextract(project, relative)
+                    self._json({"log": log})
+                else:
+                    self.send_error(404)
+            except BrokenPipeError:
+                pass
+            except Exception as error:
                 self._json({"error": str(error)}, status=500)
 
     return Handler

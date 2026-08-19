@@ -401,7 +401,29 @@ function rectLabel(row, prefix, wh) {
   return v.every(x => x !== "") ? `${v[0]},${v[1]} ${v[2]}×${v[3]}` : "—";
 }
 
+async function reextract() {
+  if (!detail) return;
+  if (!confirm(`${detail.file}\n\n이 파일의 상자(ko 미입력)를 지우고 OCR 을 ` +
+               `다시 돌립니다. 계속할까요?`)) return;
+  const pane = document.getElementById("props");
+  pane.textContent = "";
+  pane.appendChild(el("div", "empty", "재추출 중… (판독 모델 첫 로드 시 수십 초)"));
+  const res = await fetch("/api/reextract?path=" +
+                          encodeURIComponent(detail.file), {method: "POST"});
+  const body = await res.json();
+  await openFile(detail.file, null);
+  const log = el("pre", "", body.log || body.error || "");
+  log.style.cssText = "white-space:pre-wrap;color:var(--dim);font-size:11px;" +
+                      "border:1px solid var(--line);padding:6px;margin-top:8px";
+  document.getElementById("props").appendChild(log);
+}
+
 function renderBoxList(pane) {
+  const btn = el("button", "", "🔄 박스 지우고 OCR 다시");
+  btn.style.cssText = "margin-bottom:8px;background:none;border:1px solid " +
+                      "var(--line);color:var(--fg);padding:3px 10px;cursor:pointer";
+  btn.onclick = reextract;
+  pane.appendChild(btn);
   // 파일 선택 직후 — crop/text 상자 목록. 항목 클릭 = 상자 선택
   pane.appendChild(el("h3", "", `상자 목록 (${detail.rows.length}행)`));
   const t = el("table");
@@ -437,8 +459,16 @@ function renderProps() {
     return;
   }
   if (!selected) {
-    if (detail.rows.length) renderBoxList(pane);
-    else pane.appendChild(el("div", "empty", "이 파일에는 행이 없습니다."));
+    if (detail.rows.length) {
+      renderBoxList(pane);
+    } else {
+      const btn = el("button", "", "🔄 박스 지우고 OCR 다시");
+      btn.style.cssText = "margin-bottom:8px;background:none;border:1px solid " +
+                          "var(--line);color:var(--fg);padding:3px 10px;cursor:pointer";
+      btn.onclick = reextract;
+      pane.appendChild(btn);
+      pane.appendChild(el("div", "empty", "이 파일에는 행이 없습니다."));
+    }
     return;
   }
   const row = detail.rows.find(r => r.box_id === selected);
