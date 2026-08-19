@@ -1003,7 +1003,7 @@ def compose_file(
     source_path = safe_path(base_root or project.base_root, relative)
     original_path = safe_path(project.original_root, relative)
 
-    # blank 베이스 (카탈로그) — 이미지 전체가 글자라 지울 것도 없다.
+    # blank 베이스 (text-only 묶음) — 이미지 전체가 글자라 지울 것도 없다.
     # base 파일 없이 canvas 크기의 투명 캔버스에서 시작한다.
     bases = {spec.base for spec in specs}
     blank = "blank" in bases

@@ -37,7 +37,7 @@ jaguk status
   가리킨다 — copy 된 실제 파일/디렉토리를 보면서 그 경로 그대로 마킹한다.
   아직 copy 전이면 scan.json 목록으로 검증한다.
 - 규칙 셋: `--text-only`(+`--same-pattern`) = 이미지 전체가 글자 →
-  카탈로그(base 불필요) / `--row N ref|replace`(+`--multicolumn`) = ref 줄은
+  text-only 묶음(base 불필요) / `--row N ref|replace`(+`--multicolumn`) = ref 줄은
   원문 유지·번역 키·앵커, replace 줄은 지우고 그 자리에 주입 (안내판 꼴) /
   `--ignore` = 제외. 규칙 없는 파일은 auto(행 씨앗).
 - OCR 교정 사전(`ocr-dict`): 알려진 원문 어휘(.txt 한 줄 하나, 또는 용어표
@@ -110,14 +110,14 @@ effect, text_align, …}`. 상세는 [typelet/ledger.py](typelet/ledger.py) 도�
   4x 슈퍼샘플 AA, alpha_clear · rgb_ink(알파 구운 스프라이트 직접 기록),
   post overlay(선화 레이어 재합성), 비텍스트 영역 불변 검증.
 
-## 카탈로그 — 텍스트만 달랑 있는 이미지 묶음
+## text-only 묶음 — 텍스트만 달랑 있는 이미지들
 
 saveloadspotname 처럼 **이미지 전체가 글자 하나**인 파일 무리는 행 대신
-원장 최상위 `catalogs` 로 묶는다. 공통 style·canvas·text 상자를 한 번만
+원장 최상위 `text_only` 로 묶는다 (구 키 `catalogs` 도 계속 읽힌다). 공통 style·canvas·text 상자를 한 번만
 선언하고, 항목은 `파일명 → {jp, ko, status}` 만 든다:
 
 ```json
-"catalogs": [{
+"text_only": [{
   "name": "saveloadspotname",
   "dir": "parts/saveloadspotname",
   "canvas": [512, 48], "base": "blank",
@@ -138,10 +138,10 @@ saveloadspotname 처럼 **이미지 전체가 글자 하나**인 파일 무리�
   text 상자·canvas·font_size_px 는 생략 가능하다.
 - entries 항목은 canvas·text·style·opacity·overflow·fit 을 개별 override 할
   수 있다.
-- 씨앗: `typelet extract --catalog saveloadspotname` — 카탈로그 dir 의 파일만
+- 씨앗: `typelet extract --catalog saveloadspotname` — 묶음 dir 의 파일만
   OCR 해 `파일명 → jp` 로 entries 를 채운다 (기존 항목 유지).
-- `typelet status` 가 카탈로그별로 status·미번역을 집계한다.
-- 렌더·프리뷰에서 카탈로그 항목은 가상 행으로 전개된다 (box_id =
+- `typelet status` 가 묶음별로 status·미번역을 집계한다.
+- 렌더·프리뷰에서 text-only 항목은 가상 행으로 전개된다 (box_id =
   `이름:파일stem`). 원장 파일에 저장되는 원본은 entries 뿐이다.
 
 ## 용어표(terms) — 번역을 외부 JSON 에서 참조
@@ -221,7 +221,7 @@ furaiki3 internetmode1a/2/3/4a 실측):
 오답 짝 16.5). 새 아틀라스는 AI 에게 "이 아틀라스 이음새 분석해서 recompose
 스펙 만들어줘"라고 시키고 GUI 로 눈검증 후 고정하면 된다.
 
-주의: `fit`/카탈로그와 마찬가지로, 이미 추출된 행 좌표는 recompose 실행
+주의: `fit`/text-only 묶음과 마찬가지로, 이미 추출된 행 좌표는 recompose 실행
 시점에 canvas 가 네이티브 크기인 것만 자동 변환된다 — 재조합 이후에 추출한
 행은 이미 맞는 좌표계다.
 

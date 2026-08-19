@@ -12,7 +12,7 @@
     copy        (비활성) scan 목록 기반 복사 — 같은 이유로 잠정 비활성
     set         파일/디렉토리별 처리 규칙 — 대상은 **originals(작업 원본)
                 안** 경로 (copy 된 파일을 보면서 마킹)
-                  --text-only             이미지 전체가 글자 (카탈로그로)
+                  --text-only             이미지 전체가 글자 (text-only 묶음으로)
                   --same-pattern          전부 같은 스타일
                   --row N ref|replace     N번째 줄의 역할 (ref=원문 유지·앵커,
                                           replace=지우고 그 자리에 번역)
@@ -20,7 +20,7 @@
                   --ignore                처리 제외
                   --dict FILE             이 무리의 번역 용어표
                   --apply                 이미 extract 된 원장 데이터에 소급
-                                          적용 (행→카탈로그 변환·정리·스타일)
+                                          적용 (행→text-only 항목 변환·정리·스타일)
     extract     마킹된 파일을 규칙대로 **본 OCR** 해 원장에 기록
                 (set 없으면 auto = 행 씨앗, ignore 는 OCR 도 안 함)
     erase       텍스트 지우기 — 무문자 베이스 생성
@@ -374,8 +374,8 @@ def cmd_set(args) -> int:
 def apply_rule(project: Project, data: dict, key: str, rule: dict) -> None:
     """규칙을 **이미 extract 된 원장 데이터**에 소급 적용한다 (set --apply).
 
-    ignore     대상 경로의 행·카탈로그 항목을 제거
-    text-only  대상 경로의 행을 카탈로그 항목으로 변환 (행의 jp 를 합쳐
+    ignore     대상 경로의 행·text-only 항목을 제거
+    text-only  대상 경로의 행을 text-only 항목으로 변환 (행의 jp 를 합쳐
                entry.jp 로, 행은 제거 — 재-extract 없이 전환)
     rows       자동 씨앗 행(OCR seed)을 제거 — 짝짓기가 필요하므로 이후
                extract 재실행 안내
@@ -399,7 +399,7 @@ def apply_rule(project: Project, data: dict, key: str, rule: dict) -> None:
             for fname in drop:
                 del entries[fname]
             removed_entries += len(drop)
-        print(f"적용(ignore): 행 {len(targets)}개·카탈로그 항목 "
+        print(f"적용(ignore): 행 {len(targets)}개·text-only 항목 "
               f"{removed_entries}개 제거")
         return
 
@@ -429,7 +429,7 @@ def apply_rule(project: Project, data: dict, key: str, rule: dict) -> None:
             converted += a
             skipped += s
         data["rows"] = [r for r in rows if not under(r.get("file", ""))]
-        print(f"적용(text-only): 행 {len(targets)}개 → 카탈로그 항목 "
+        print(f"적용(text-only): 행 {len(targets)}개 → text-only 항목 "
               f"{converted}개 변환 (기존 항목 {skipped}개 유지)")
         return
 
@@ -569,12 +569,12 @@ def seed_rows_mode(data: dict, entry: dict, rule: dict) -> tuple[int, int]:
 
 def seed_text_only(data: dict, entry: dict, rule_path: str, rule: dict,
                     lang: str) -> tuple[int, int]:
-    """--text-only 규칙 씨앗 — 카탈로그 항목으로 (base 파일 불필요)."""
+    """--text-only 규칙 씨앗 — text-only 항목으로 (base 파일 불필요)."""
     directory = rule_path
     if "." in Path(rule_path).name:            # 규칙이 파일 하나를 가리킴
         directory = str(Path(rule_path).parent).replace("\\", "/")
     name = Path(directory).name or "catalog"
-    catalogs = data.setdefault("catalogs", [])
+    catalogs = ledgermod.text_only_sets(data, create=True)
     cat = next((c for c in catalogs if c["name"] == name), None)
     if cat is None:
         style = rule.get("style") or name
@@ -761,7 +761,7 @@ def cmd_status(args) -> int:
     for cat in ledgermod.catalogs(data):
         entries = cat.get("entries") or {}
         c = Counter(e.get("status", "todo") for e in entries.values())
-        print(f"카탈로그 {cat['name']}: {len(entries)}항목  "
+        print(f"text-only {cat['name']}: {len(entries)}항목  "
               + " ".join(f"{k}={v}" for k, v in c.most_common()))
     terms = ledgermod.load_terms(project, data)
     if terms:
@@ -826,7 +826,7 @@ def main(argv: list[str] | None = None) -> int:
                        help="파일/디렉토리 처리 규칙 (대상은 originals 안 경로)")
     p.add_argument("target", help="originals(작업 원본) 안의 파일/디렉토리")
     p.add_argument("--text-only", action="store_true",
-                   help="이미지 전체가 글자 — 카탈로그로 처리 (base 불필요)")
+                   help="이미지 전체가 글자 — text-only 묶음으로 (base 불필요)")
     p.add_argument("--same-pattern", action="store_true",
                    help="무리 전체가 같은 스타일")
     p.add_argument("--row", nargs=2, action="append", metavar=("N", "ROLE"),
@@ -838,7 +838,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--style", default="", help="적용할 스타일 이름")
     p.add_argument("--apply", action="store_true",
                    help="규칙을 이미 extract 된 원장 데이터에 소급 적용 — "
-                        "행→카탈로그 변환(text-only), 정리(ignore), 스타일 부여")
+                        "행→text-only 변환, 정리(ignore), 스타일 부여")
     p.add_argument("--clear", action="store_true", help="규칙 제거")
     p.set_defaults(func=cmd_set)
 

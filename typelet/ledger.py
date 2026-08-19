@@ -27,11 +27,11 @@
 파일 단위 후처리 목록: {"file", "op", …인자, "note"}. 현재 op 는 overlay
 (무문자 트리의 RGBA 레이어를 글자 위에 알파 합성 — render.apply_post) 하나.
 
-## catalogs (선택, 최상위 키) — 텍스트만 달랑 있는 이미지 묶음
+## text_only (선택, 최상위 키 — 구 이름 catalogs) — 텍스트만 있는 이미지 묶음
 saveloadspotname 처럼 이미지 전체가 글자 하나인 파일 무리는 행 대신
-카탈로그로 묶는다 — 공통 속성을 한 번만 선언하고 항목은 파일명→번역만 든다:
+text_only 로 묶는다 — 공통 속성을 한 번만 선언하고 항목은 파일명→번역만 든다:
 
-    {"name":  카탈로그 이름 (box_id 접두, status 집계 단위),
+    {"name":  묶음 이름 (box_id 접두, status 집계 단위),
      "dir":   원본 트리 하위 디렉토리 ("parts/saveloadspotname"),
      "canvas": [w, h] 또는 "original" (원본 이미지 크기 — 장마다 다를 때),
      "base":  "blank" (기본) — base 파일 없이 투명 캔버스에서 렌더.
@@ -65,7 +65,7 @@ entries 의 개별 항목은 canvas·text·style·opacity·overflow·fit 을 ove
 
 로드 시 expand_catalogs() 가 항목을 가상 행으로 펼친다 (box_id =
 "이름:파일stem"). **가상 행은 원장 파일에 저장되지 않는다** — entries 가
-원본이다. flat_rows() 는 일반 행 + 카탈로그 전개를 함께 돌려준다.
+원본이다. flat_rows() 는 일반 행 + text-only 전개를 함께 돌려준다.
 
 ## 스타일 스키마
 name, label, font_family_ko, font_weight, font_size_px, fill_rgb(#RRGGBB),
@@ -109,19 +109,29 @@ def rows(data: dict) -> list[dict]:
     return data["rows"]
 
 
-def catalogs(data: dict) -> list[dict]:
-    return data.get("catalogs") or []
+def text_only_sets(data: dict, create: bool = False) -> list[dict]:
+    """text-only 묶음 목록 — 구 키 "catalogs" 도 계속 읽는다 (알리아스)."""
+    if "text_only" in data:
+        return data["text_only"]
+    if "catalogs" in data:
+        return data["catalogs"]
+    if create:
+        return data.setdefault("text_only", [])
+    return []
+
+
+catalogs = text_only_sets      # 구 이름 — 호출부 호환
 
 
 def expand_catalogs(data: dict) -> list[dict]:
-    """카탈로그 항목 → 가상 행. 저장 대상이 아니다 — entries 가 원본이다."""
+    """text-only 항목 → 가상 행. 저장 대상이 아니다 — entries 가 원본이다."""
     out = []
     for cat in catalogs(data):
         name = cat["name"]
         directory = (cat.get("dir") or "").strip("/")
         base = cat.get("base", "blank")
         if base not in ("blank", "file"):
-            raise ValueError(f"카탈로그 {name}: base 는 blank|file 이다: {base!r}")
+            raise ValueError(f"text-only {name}: base 는 blank|file 이다: {base!r}")
         for fname, e in (cat.get("entries") or {}).items():
             stem = fname.split(".")[0]
             canvas = e.get("canvas", cat.get("canvas"))
@@ -195,7 +205,7 @@ def flatten_row(r: dict) -> dict:
 
 
 def flat_rows(data: dict) -> list[dict]:
-    """일반 행 + 카탈로그 전개 — 렌더·그림이 보는 전체 목록."""
+    """일반 행 + text-only 전개 — 렌더·그림이 보는 전체 목록."""
     return [flatten_row(r) for r in rows(data) + expand_catalogs(data)]
 
 

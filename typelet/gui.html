@@ -115,7 +115,7 @@ async function loadTree() {
   const tree = await (await fetch("/api/tree")).json();
   const nav = document.getElementById("tree");
   nav.textContent = "";
-  if (tree.catalogs.length) nav.appendChild(el("div", "sect", "카탈로그"));
+  if (tree.catalogs.length) nav.appendChild(el("div", "sect", "text-only"));
   for (const cat of tree.catalogs) {
     const group = el("div", "group");
     group.appendChild(document.createTextNode(cat.name + " "));
@@ -413,7 +413,7 @@ function renderProps() {
     pane.appendChild(banner);
   }
 
-  // ① inline — 일반 행이면 구조형 행, 카탈로그 항목이면 entry
+  // ① inline — 일반 행이면 구조형 행, text-only 항목이면 entry
   const isCatalogRow = !!row.catalog;
   pane.appendChild(el("h3", "", "Inline — " + selected));
   if (isCatalogRow && detail.entry) {
@@ -424,7 +424,7 @@ function renderProps() {
     pane.appendChild(table(row));
   }
 
-  // ② 카탈로그 기본값 (해당하면)
+  // ② text-only 묶음 기본값 (해당하면)
   if (isCatalogRow && detail.catalog) {
     pane.appendChild(el("h3", "", "Catalog — " + detail.catalog.name));
     pane.appendChild(table(detail.catalog));

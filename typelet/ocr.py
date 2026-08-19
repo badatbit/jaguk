@@ -574,14 +574,14 @@ def seed_rows(data: dict, results: list[dict]) -> tuple[int, int]:
 
 def seed_catalog(project: Project, results: list[dict], name: str
                  ) -> tuple[int, int]:
-    """OCR 결과를 카탈로그 entries 로. 이미지 = 글자 하나인 무리 전용 —
-    줄들의 텍스트만 합쳐 jp 로 넣는다 (좌표는 카탈로그 공통 text 상자 몫).
+    """OCR 결과를 text-only 묶음 entries 로. 이미지 = 글자 하나인 무리 전용 —
+    줄들의 텍스트만 합쳐 jp 로 넣는다 (좌표는 묶음 공통 text 상자 몫).
     """
     data = ledgermod.load(project)
     cats = {c["name"]: c for c in ledgermod.catalogs(data)}
     if name not in cats:
         raise RuntimeError(
-            f"원장에 카탈로그 {name!r} 가 없습니다 — canvas·style·text 상자를 "
+            f"원장에 text-only 묶음 {name!r} 가 없습니다 — canvas·style·text 상자를 "
             "정해 catalogs 에 먼저 선언하세요 (스키마는 ledger.py 도크스트링)."
         )
     cat = cats[name]
@@ -612,9 +612,9 @@ def run(project: Project, only: str = "", seed: bool = False,
         data = ledgermod.load(project)
         cats = {c["name"]: c for c in ledgermod.catalogs(data)}
         if catalog not in cats:
-            print(f"원장에 카탈로그 {catalog!r} 가 없습니다 — 먼저 선언하세요.")
+            print(f"원장에 text-only 묶음 {catalog!r} 가 없습니다 — 먼저 선언하세요.")
             return 2
-        # 카탈로그 디렉토리로 대상 한정
+        # 묶음 디렉토리로 대상 한정
         only = only or (cats[catalog].get("dir") or "").strip("/")
     files = collect_files(project.original_root, only)
     if not files:
@@ -650,7 +650,7 @@ def run(project: Project, only: str = "", seed: bool = False,
         print(f"raw 저장 -> {out_path}")
     if catalog:
         added, skipped = seed_catalog(project, results, catalog)
-        print(f"카탈로그 {catalog} 에 {added}항목 추가, 기존 {skipped}항목 유지 "
+        print(f"text-only {catalog} 에 {added}항목 추가, 기존 {skipped}항목 유지 "
               f"-> {project.ledger_path}")
     elif seed:
         added, skipped = seed_ledger(project, results)

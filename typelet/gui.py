@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """jaguk gui — 원장 검수용 로컬 웹 툴 (표준 라이브러리만 사용).
 
-왼쪽: 카탈로그 그룹(saveloadspotname 류는 항목 리스트로) + 행이 있는 파일 목록
+왼쪽: text-only 묶음 그룹(saveloadspotname 류는 항목 리스트로) + 행이 있는 파일 목록
 가운데: 이미지 뷰 — 원본 / erased / injected / crop-box / text-box
 오른쪽: 선택한 상자의 속성 — inline(행/entry) → catalog 기본값 → style →
         상위 style(style 의 "base" 사슬)을 아래로 계속 표시
@@ -126,7 +126,7 @@ def build_detail(project: Project, relative: str) -> dict:
         row["_problem"] = problem
     return {
         "file": relative,
-        "rows": flat,                    # 평면 행 (카탈로그 전개 포함)
+        "rows": flat,                    # 평면 행 (text-only 전개 포함)
         "raw": raw_rows,                 # 일반 행의 구조형 (inline 속성 표시용)
         "catalog": catalog,
         "entry": entry,
@@ -138,7 +138,7 @@ def build_detail(project: Project, relative: str) -> dict:
 
 
 def render_blank(project: Project, relative: str) -> bytes | None:
-    """blank 베이스(text-only 카탈로그) 파일의 erased = 공백 이미지.
+    """blank 베이스(text-only 묶음) 파일의 erased = 공백 이미지.
 
     이미지 전체가 글자라 지우면 아무것도 안 남는다 — 파일 없이 캔버스
     크기의 투명 PNG 를 즉석 생성한다. blank 가 아니면 None."""

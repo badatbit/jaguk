@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", action="store_true",
                    help="결과를 원장 씨앗 행으로 추가 (중복은 건너뜀)")
     p.add_argument("--catalog", default="",
-                   help="이 카탈로그의 entries 로 씨앗 (대상도 카탈로그 dir 로 한정)")
+                   help="이 text-only 묶음의 entries 로 씨앗 (대상도 묶음 dir 로 한정)")
     p.add_argument("--lang", default="", help="OCR 언어 태그 (기본: 설정값)")
     p.add_argument("--backend", default="",
                    choices=("", "auto", "windows", "tesseract", "easyocr"),
@@ -131,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
             missing = sum(1 for e in entries.values()
                           if not (e.get("ko") or "").strip())
             summary = " ".join(f"{k}={v}" for k, v in counts.most_common())
-            print(f"카탈로그 {cat['name']}: {len(entries)}항목  {summary}  "
+            print(f"text-only {cat['name']}: {len(entries)}항목  {summary}  "
                   f"ko비어={missing}")
         return 0
     parser.error(f"알 수 없는 서브커맨드 {args.cmd!r}")
