@@ -434,22 +434,33 @@ def apply_rule(project: Project, data: dict, key: str, rule: dict) -> None:
         return
 
     if mode == "rows":
-        seeds = [r for r in targets if r.get("notes", "").startswith(("OCR seed",))]
-        data["rows"] = [r for r in rows
-                        if not (under(r.get("file", ""))
-                                and r.get("notes", "").startswith(("OCR seed",)))]
-        print(f"적용(rows): 자동 씨앗 행 {len(seeds)}개 제거 — 짝짓기가 "
-              f"필요하니 `jaguk extract --only {key}` 로 다시 뽑으세요")
+        seeds = [r for r in targets
+                 if (r.get("notes") or "").startswith("OCR seed")]
+        if seeds:
+            data["rows"] = [r for r in rows
+                            if not (under(r.get("file", ""))
+                                    and (r.get("notes") or "").startswith("OCR seed"))]
+            print(f"적용(rows): 자동 씨앗 행 {len(seeds)}개 제거 — 짝짓기가 "
+                  f"필요하니 `jaguk extract --only {key}` 로 다시 뽑으세요")
         targets = [r for r in data["rows"] if under(r.get("file", ""))]
 
-    if rule.get("style"):
+    # 스타일 통일 — --style 이 있으면 그것으로, --same-pattern 만 있으면
+    # 기존 행들의 다수결 스타일로 무리 전체를 맞춘다
+    style = rule.get("style", "")
+    if not style and rule.get("same_pattern") and targets:
+        from collections import Counter
+        counts = Counter(r.get("style") for r in targets if r.get("style"))
+        if counts:
+            style = counts.most_common(1)[0][0]
+    if style:
         styled = 0
         for r in targets:
-            if r.get("style") != rule["style"]:
-                r["style"] = rule["style"]
+            if r.get("style") != style:
+                r["style"] = style
                 styled += 1
-        if styled:
-            print(f"적용(style): 행 {styled}개에 스타일 {rule['style']!r} 부여")
+        label = "style" if rule.get("style") else "same-pattern·다수결"
+        print(f"적용({label}): 스타일 {style!r} 통일 — {styled}개 변경 "
+              f"(대상 {len(targets)}행)")
 
 
 match_rule = ledgermod.match_rule       # 규칙 매칭 — ledger 모듈이 단일 소스
