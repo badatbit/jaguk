@@ -70,6 +70,11 @@
   <span class="modes" id="bases"></span>
   <span style="color:var(--line)">|</span>
   <span class="modes" id="overlays"></span>
+  <span style="color:var(--line)">|</span>
+  <span class="modes" id="compare"></span>
+  <input type="range" id="alphaSlider" min="0" max="100" value="50"
+         style="width:70px;display:none" title="injected 불투명도"
+         oninput="overlayAlpha=this.value/100; renderStage()">
   <span class="file" id="curfile">파일을 선택하세요</span>
   <span class="zoom">
     <span class="modes" id="bgButtons"></span>
@@ -90,6 +95,9 @@
 const BASES = {"원본": "original", "erased": "erased", "injected": "injected"};
 let base = "원본";
 let overlays = {"crop-box": false, "text-box": false};   // 베이스와 독립 토글
+// 비교 보기: "" 단독 | "overlay" 겹침 | "v" 상하 | "h" 좌우 (원본 + injected)
+const COMPARE = {"겹침": "overlay", "상하": "v", "좌우": "h"};
+let compare = "", overlayAlpha = 0.5;
 let detail = null, zoom = 1, selected = null;
 
 function el(tag, cls, text) {
@@ -149,6 +157,17 @@ function renderModes() {
                         renderModes(); renderStage(); };
     overlayBar.appendChild(b);
   }
+  const compareBar = document.getElementById("compare");
+  compareBar.textContent = "";
+  for (const [name, value] of Object.entries(COMPARE)) {
+    const b = el("button", compare === value ? "on" : "", name);
+    b.title = "원본 + injected 비교 (" + name + ")";
+    b.onclick = () => { compare = compare === value ? "" : value;
+                        renderModes(); renderStage(); };
+    compareBar.appendChild(b);
+  }
+  document.getElementById("alphaSlider").style.display =
+    compare === "overlay" ? "" : "none";
 }
 
 async function openFile(file, item) {
@@ -234,20 +253,65 @@ function rowRect(row, prefix) {
   return vals.some(v => v === null) ? null : vals;
 }
 
+function imgEl(kind) {
+  const img = document.createElement("img");
+  img.src = "/img/" + kind + "/" + detail.file;
+  img.onload = () => { img.style.width = img.naturalWidth * zoom + "px"; };
+  return img;
+}
+
+function missingEl(kind) {
+  const reason = kind === "injected" && detail.injected_reason
+    ? detail.injected_reason : `(${kind} 이미지 없음)`;
+  return el("div", "", reason);
+}
+
+function imgOrMissing(kind) {
+  return detail.images[kind] ? imgEl(kind) : missingEl(kind);
+}
+
+function captioned(kind, label) {
+  const wrap = el("div");
+  wrap.appendChild(el("div", "cap", label));
+  const inner = el("div");
+  inner.style.position = "relative";
+  inner.style.display = "inline-block";
+  inner.appendChild(imgOrMissing(kind));
+  wrap.appendChild(inner);
+  return [wrap, inner];
+}
+
 function renderStage() {
   const stage = document.getElementById("stage");
   stage.textContent = "";
   if (!detail) return;
-  const kind = BASES[base];
-  if (!detail.images[kind]) {
-    const reason = kind === "injected" && detail.injected_reason
-      ? detail.injected_reason : `(${kind} 이미지 없음)`;
-    stage.appendChild(el("div", "", reason));
+
+  let boxHost = stage;                 // 상자 오버레이를 얹을 컨테이너
+  if (compare === "overlay") {
+    // 겹쳐보기 — 원본 위에 injected 를 불투명도 슬라이더로 겹친다
+    stage.appendChild(imgOrMissing("original"));
+    if (detail.images.injected) {
+      const top = imgEl("injected");
+      top.style.position = "absolute";
+      top.style.left = "0";
+      top.style.top = "0";
+      top.style.opacity = overlayAlpha;
+      stage.appendChild(top);
+    }
+  } else if (compare === "v" || compare === "h") {
+    const row = el("div");
+    row.style.display = "flex";
+    row.style.flexDirection = compare === "v" ? "column" : "row";
+    row.style.gap = "14px";
+    row.style.alignItems = "flex-start";
+    const [wrapA, innerA] = captioned("original", "원본");
+    const [wrapB] = captioned("injected", "injected");
+    row.appendChild(wrapA);
+    row.appendChild(wrapB);
+    stage.appendChild(row);
+    boxHost = innerA;                  // 상자는 원본 쪽에만
   } else {
-    const img = document.createElement("img");
-    img.src = "/img/" + kind + "/" + detail.file;
-    img.onload = () => { img.style.width = img.naturalWidth * zoom + "px"; };
-    stage.appendChild(img);
+    stage.appendChild(imgOrMissing(BASES[base]));
   }
 
   // 상자 오버레이 — 어느 베이스 위에도 겹칠 수 있는 독립 토글
@@ -256,11 +320,11 @@ function renderStage() {
     if (overlays["crop-box"]) {
       const crop = rowRect(row, "crop");
       const src = rowRect(row, "source");
-      if (src) stage.appendChild(boxDiv("src", src, "", () => select(id)));
+      if (src) boxHost.appendChild(boxDiv("src", src, "", () => select(id)));
       if (crop) {
         const div = boxDiv("crop", crop, id, () => select(id));
         if (selected === id) div.classList.add("sel");
-        stage.appendChild(div);
+        boxHost.appendChild(div);
       }
     }
     if (overlays["text-box"]) {
@@ -269,7 +333,7 @@ function renderStage() {
         const div = boxDiv("text", text, id + " " + (row.style || ""),
                            () => select(id));
         if (selected === id && !overlays["crop-box"]) div.classList.add("sel");
-        stage.appendChild(div);
+        boxHost.appendChild(div);
       }
     }
   }

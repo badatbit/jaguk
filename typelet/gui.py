@@ -86,6 +86,9 @@ def build_detail(project: Project, relative: str) -> dict:
     # 디스크 산출물 없이도 미리보기가 가능하다
     has_translation = any((r.get("ko_text") or "").strip() for r in flat)
     images["injected"] = images["injected"] or has_translation
+    # blank 베이스(text-only)의 erased 는 공백 이미지로 즉석 생성된다
+    images["erased"] = images["erased"] or any(
+        r.get("base") == "blank" for r in flat)
     # 못 보여주는 이유 — 이미지가 없는 게 아니라 데이터 문제임을 구분한다
     injected_reason = None
     if not images["injected"]:
@@ -102,6 +105,37 @@ def build_detail(project: Project, relative: str) -> dict:
         "images": images,
         "injected_reason": injected_reason,
     }
+
+
+def render_blank(project: Project, relative: str) -> bytes | None:
+    """blank 베이스(text-only 카탈로그) 파일의 erased = 공백 이미지.
+
+    이미지 전체가 글자라 지우면 아무것도 안 남는다 — 파일 없이 캔버스
+    크기의 투명 PNG 를 즉석 생성한다. blank 가 아니면 None."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    data = ledgermod.load(project)
+    flat = [r for r in ledgermod.flat_rows(data) if r["file"] == relative]
+    if not any(r.get("base") == "blank" for r in flat):
+        return None
+    width = height = 0
+    for row in flat:
+        w = int(row.get("canvas_w") or 0)
+        h = int(row.get("canvas_h") or 0)
+        if w and h:
+            width, height = w, h
+            break
+    if not (width and height):          # canvas "original" — 원본 크기
+        original = _safe_join(project.original_root, relative)
+        if not original or not original.exists():
+            return None
+        with Image.open(original) as image:
+            width, height = image.size
+    buffer = BytesIO()
+    Image.new("RGBA", (width, height), (0, 0, 0, 0)).save(buffer, "PNG")
+    return buffer.getvalue()
 
 
 def render_injected(project: Project, relative: str) -> bytes | None:
@@ -186,6 +220,12 @@ def make_handler(project: Project):
                     if kind == "injected":
                         # 원장 현재 상태로 즉석 렌더 — 실패 시 디스크 폴백
                         body = render_injected(project, relative)
+                    elif kind == "erased":
+                        root = IMAGE_ROOTS["erased"](project)
+                        disk = _safe_join(root, relative)
+                        if not disk or not disk.exists():
+                            # text-only(blank 베이스)는 공백 이미지가 정답
+                            body = render_blank(project, relative)
                     if body is None:
                         root_fn = IMAGE_ROOTS.get(kind)
                         target = root_fn and _safe_join(root_fn(project), relative)
