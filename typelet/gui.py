@@ -84,16 +84,32 @@ def build_detail(project: Project, relative: str) -> dict:
         images[kind] = bool(target and target.exists())
     # injected 는 즉석 렌더 — ko(용어표 해석 포함)가 있는 행이 하나라도 있으면
     # 디스크 산출물 없이도 미리보기가 가능하다
-    has_translation = any((r.get("ko_text") or "").strip() for r in flat)
-    images["injected"] = images["injected"] or has_translation
     # blank 베이스(text-only)의 erased 는 공백 이미지로 즉석 생성된다
     images["erased"] = images["erased"] or any(
         r.get("base") == "blank" for r in flat)
-    # 못 보여주는 이유 — 이미지가 없는 게 아니라 데이터 문제임을 구분한다
+    # injected 는 번역문이 없어도 베이스만으로라도 생성한다 — 행이 있으면 가능
+    images["injected"] = images["injected"] or bool(flat) and (
+        images["erased"] or any((r.get("ko_text") or "").strip() for r in flat))
     injected_reason = None
     if not images["injected"]:
-        injected_reason = ("번역 데이터가 없음 (ko 비어 있고 용어표 미해석)"
+        injected_reason = ("erased 베이스 없음 — jaguk erase 필요"
                            if flat else "원장 데이터가 없음 (행/카탈로그 항목 없음)")
+
+    # 행별 문제 진단 — 개별 text 상자에 에러로 표시된다
+    from . import render as rendermod
+    styles_by_name = ledgermod.styles_map(data)
+    for row in flat:
+        problem = None
+        if not (row.get("ko_text") or "").strip():
+            problem = "번역문 없음"
+        else:
+            try:
+                rendermod.resolve(dict(row), styles_by_name)
+            except rendermod.SkipRow as skip:
+                problem = f"미완: {skip}"
+            except Exception as error:
+                problem = f"오류: {error}"
+        row["_problem"] = problem
     return {
         "file": relative,
         "rows": flat,                    # 평면 행 (카탈로그 전개 포함)
@@ -190,6 +206,17 @@ def render_injected(project: Project, relative: str) -> bytes | None:
         spec.flow = flows.get(spec.box_id)
         specs.append(spec)
     if not specs:
+        # 번역문이 하나도 없어도 injected 는 생성 — 지워진 베이스 그대로.
+        # 문제는 개별 text 상자의 에러 표시가 알린다.
+        blank = render_blank(project, relative)
+        if blank is not None:
+            _INJECT_CACHE[relative] = (cache_key, blank)
+            return blank
+        erased = _safe_join(project.base_root, relative)
+        if erased and erased.exists():
+            body = erased.read_bytes()
+            _INJECT_CACHE[relative] = (cache_key, body)
+            return body
         return None
     posts = [p for p in data.get("post", []) if p.get("file") == relative]
     try:

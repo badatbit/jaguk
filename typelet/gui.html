@@ -47,6 +47,8 @@
   .box.crop { border: 1px solid var(--crop); }
   .box.text { border: 1px dashed var(--text); }
   .box.src  { border: 1px solid var(--src); }
+  .box.err  { border: 1px dashed #ff5340; }
+  .box.err .tag { color: #ff8a7a; }
   .box.sel  { outline: 2px solid var(--accent); }
   .box .tag { position: absolute; top: -16px; left: -1px; font-size: 10px;
               background: rgba(0,0,0,.75); padding: 0 4px; white-space: nowrap; }
@@ -333,7 +335,11 @@ function renderStage() {
     if (overlays["text-box"]) {
       const text = rowRect(row, "text");
       if (text) {
-        const div = boxDiv("text", text, id + " " + (row.style || ""),
+        const problem = row._problem;
+        const label = problem
+          ? id + " ⚠" + problem
+          : id + " " + (row.style || "");
+        const div = boxDiv(problem ? "text err" : "text", text, label,
                            () => select(id));
         if (selected === id && !overlays["crop-box"]) div.classList.add("sel");
         boxHost.appendChild(div);
@@ -367,6 +373,14 @@ function renderProps() {
   }
   const row = detail.rows.find(r => r.box_id === selected);
   if (!row) return;
+
+  if (row._problem) {
+    const banner = el("div", "", "⚠ " + row._problem);
+    banner.style.cssText =
+      "background:#4a2320;border:1px solid #ff5340;padding:6px 8px;" +
+      "margin-bottom:10px;color:#ff8a7a";
+    pane.appendChild(banner);
+  }
 
   // ① inline — 일반 행이면 구조형 행, 카탈로그 항목이면 entry
   const isCatalogRow = !!row.catalog;
