@@ -444,6 +444,12 @@ def apply_rule(project: Project, data: dict, key: str, rule: dict) -> None:
                   f"필요하니 `jaguk extract --only {key}` 로 다시 뽑으세요")
         targets = [r for r in data["rows"] if under(r.get("file", ""))]
 
+    if rule.get("same_pattern"):
+        slots, moved = _unify_boxes(targets)
+        if moved:
+            print(f"적용(same-pattern·상자 통일): 슬롯 {slots}개에서 "
+                  f"상자 {moved}개를 중앙값으로 정렬 (OCR 씨앗 행만)")
+
     # 스타일 통일 — --style 이 있으면 그것으로, --same-pattern 만 있으면
     # 기존 행들의 다수결 스타일로 무리 전체를 맞춘다
     style = rule.get("style", "")
@@ -461,6 +467,63 @@ def apply_rule(project: Project, data: dict, key: str, rule: dict) -> None:
         label = "style" if rule.get("style") else "same-pattern·다수결"
         print(f"적용({label}): 스타일 {style!r} 통일 — {styled}개 변경 "
               f"(대상 {len(targets)}행)")
+
+
+def _unify_boxes(targets: list[dict]) -> tuple[int, int]:
+    """same-pattern 무리의 상자 위치·크기 통일 — OCR 지터 제거.
+
+    같은 레이아웃이 파일마다 반복되는 무리에서, OCR 이 잡은 상자는 파일마다
+    몇 px 씩 흔들린다. 파일 간 겹치는 상자(IoU > 0.5)를 슬롯으로 묶어
+    text·source·crop 을 성분별 중앙값으로 정렬한다.
+
+    **OCR 씨앗 행(notes 'OCR seed'·'jaguk extract')만 만진다** — 실측·이관·
+    손질 상자는 근거가 있는 값이라 통일 대상이 아니다. (슬롯, 조정 행 수)
+    """
+    from statistics import median
+
+    def anchor(row):
+        return row.get("text") or row.get("source") \
+            or (row.get("crop") or {}).get("rect")
+
+    seeds = [r for r in targets
+             if (r.get("notes") or "").startswith(("OCR seed", "jaguk"))
+             and anchor(r)]
+    clusters: list[list[dict]] = []
+    for row in seeds:
+        x, y, w, h = anchor(row)
+        box = {"x": x, "y": y, "w": w, "h": h}
+        for cluster in clusters:
+            cx, cy, cw, ch = anchor(cluster[0])
+            if ocrmod._overlaps(box, {"x": cx, "y": cy, "w": cw, "h": ch}):
+                cluster.append(row)
+                break
+        else:
+            clusters.append([row])
+
+    moved = 0
+    slots = 0
+    for cluster in clusters:
+        if len(cluster) < 2:
+            continue                     # 혼자면 통일할 기준이 없다
+        slots += 1
+        for key in ("text", "source"):
+            rects = [r[key] for r in cluster if r.get(key)]
+            if len(rects) < 2:
+                continue
+            canon = [int(median(c)) for c in zip(*rects)]
+            for r in cluster:
+                if r.get(key) and r[key] != canon:
+                    r[key] = list(canon)
+                    moved += 1
+        crops = [r["crop"]["rect"] for r in cluster
+                 if (r.get("crop") or {}).get("rect")]
+        if len(crops) >= 2:
+            canon = [int(median(c)) for c in zip(*crops)]
+            for r in cluster:
+                if (r.get("crop") or {}).get("rect") and r["crop"]["rect"] != canon:
+                    r["crop"]["rect"] = list(canon)
+                    moved += 1
+    return slots, moved
 
 
 match_rule = ledgermod.match_rule       # 규칙 매칭 — ledger 모듈이 단일 소스
