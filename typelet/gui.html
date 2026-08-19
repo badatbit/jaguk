@@ -135,6 +135,26 @@ async function loadTree() {
     nav.appendChild(group);
     nav.appendChild(body);
   }
+  if ((tree.groups || []).length)
+    nav.appendChild(el("div", "sect", "규칙 그룹"));
+  for (const g of tree.groups || []) {
+    const group = el("div", "group");
+    group.appendChild(document.createTextNode(g.name + " "));
+    group.appendChild(el("span", "n", `(${g.count} · ${g.mode})`));
+    const body = el("div");
+    body.style.display = "none";
+    group.onclick = () =>
+      body.style.display = body.style.display === "none" ? "" : "none";
+    for (const f of g.files) {
+      const item = el("div", "item",
+        `${f.file.split("/").pop()} (${f.rows})`);
+      item.dataset.file = f.file;
+      item.onclick = () => openFile(f.file, item);
+      body.appendChild(item);
+    }
+    nav.appendChild(group);
+    nav.appendChild(body);
+  }
   if (tree.files.length) nav.appendChild(el("div", "sect", "파일 (행)"));
   for (const f of tree.files) {
     const item = el("div", "item", `${f.file} (${f.rows})`);

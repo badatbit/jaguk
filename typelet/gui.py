@@ -51,9 +51,23 @@ def build_tree(project: Project) -> dict:
     by_file: dict[str, int] = {}
     for row in ledgermod.rows(data):
         by_file[row["file"]] = by_file.get(row["file"], 0) + 1
-    files = [{"file": f, "rows": n} for f, n in sorted(by_file.items())]
-    return {"catalogs": catalogs, "files": files,
-            "rules": data.get("rules", {})}
+    # 규칙(set) 경로 기준 그룹핑 — roadguidesign 434판 같은 무리가 트리에서
+    # 접히는 그룹으로 보이게 (데이터 모델은 행 그대로, 표시만 묶는다)
+    rules_map = data.get("rules", {})
+    grouped: dict[str, list] = {}
+    loose = []
+    for relative, count in sorted(by_file.items()):
+        rule_path, rule = ledgermod.match_rule(rules_map, relative)
+        entry = {"file": relative, "rows": count}
+        if rule_path and rule_path != relative:     # 디렉토리 규칙만 그룹
+            grouped.setdefault(rule_path, []).append(entry)
+        else:
+            loose.append(entry)
+    groups = [{"name": path, "mode": ledgermod.rule_mode(rules_map[path]),
+               "count": len(entries), "files": entries}
+              for path, entries in sorted(grouped.items())]
+    return {"catalogs": catalogs, "groups": groups, "files": loose,
+            "rules": rules_map}
 
 
 def build_detail(project: Project, relative: str) -> dict:
