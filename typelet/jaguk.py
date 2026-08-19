@@ -347,6 +347,8 @@ def cmd_set(args) -> int:
             rows[str(int(number))] = role
     if args.same_pattern:
         rule["same_pattern"] = True
+    if args.unify_boxes:
+        rule["unify_boxes"] = True
     if args.multicolumn:
         rule["multicolumn"] = True
     if args.style:
@@ -450,6 +452,11 @@ def apply_rule(project: Project, data: dict, key: str, rule: dict) -> None:
             print(f"적용(same-pattern·상자 통일): 슬롯 {slots}개에서 "
                   f"상자 {moved}개를 중앙값으로 정렬 (OCR 씨앗 행만)")
 
+    if rule.get("unify_boxes"):
+        slots, moved = _unify_text_boxes(targets, rule)
+        print(f"적용(unify-boxes): 규칙에 슬롯 {slots}개 기록, 행 {moved}개는 "
+              f"slot 참조로 정규화 (crop·source 는 실측 유지)")
+
     # 스타일 통일 — --style 이 있으면 그것으로, --same-pattern 만 있으면
     # 기존 행들의 다수결 스타일로 무리 전체를 맞춘다
     style = rule.get("style", "")
@@ -524,6 +531,50 @@ def _unify_boxes(targets: list[dict]) -> tuple[int, int]:
                     r["crop"]["rect"] = list(canon)
                     moved += 1
     return slots, moved
+
+
+def _unify_text_boxes(targets: list[dict], rule: dict) -> tuple[int, int]:
+    """text 상자(주입 위치)를 **규칙의 slots 로 정규화** — 명시적 opt-in.
+
+    IoU>0.5 로 겹치는 text 상자를 슬롯으로 묶어, 표준 상자
+    [중심 중앙값 − 폭 중앙값/2, y, 폭 중앙값, h] 를 **규칙의 "slots" 에
+    슬롯당 1개만** 기록한다. 행은 text 를 지우고 slot 인덱스만 갖는다
+    (flat_rows 가 규칙에서 채움) — 나중에 주입 위치를 일괄 조정할 땐
+    규칙의 slots 만 고치면 전 행에 반영된다. crop(지울 범위)·source
+    (원문 실측)는 근거 값이므로 건드리지 않는다.
+    """
+    from statistics import median
+
+    boxed = [r for r in targets if r.get("text")]
+    clusters: list[list[dict]] = []
+    for row in boxed:
+        x, y, w, h = row["text"]
+        box = {"x": x, "y": y, "w": w, "h": h}
+        for cluster in clusters:
+            cx, cy, cw, ch = cluster[0]["text"]
+            if ocrmod._overlaps(box, {"x": cx, "y": cy, "w": cw, "h": ch}):
+                cluster.append(row)
+                break
+        else:
+            clusters.append([row])
+    clusters.sort(key=lambda c: c[0]["text"][0])    # 왼쪽부터 안정된 순번
+
+    slots = []
+    moved = 0
+    for index, cluster in enumerate(clusters):
+        centers = [r["text"][0] + r["text"][2] / 2 for r in cluster]
+        widths = [r["text"][2] for r in cluster]
+        width = int(median(widths))
+        slots.append([round(median(centers) - width / 2),
+                      int(median(r["text"][1] for r in cluster)),
+                      width,
+                      int(median(r["text"][3] for r in cluster))])
+        for r in cluster:
+            r["slot"] = index
+            r.pop("text", None)
+            moved += 1
+    rule["slots"] = slots
+    return len(slots), moved
 
 
 match_rule = ledgermod.match_rule       # 규칙 매칭 — ledger 모듈이 단일 소스
@@ -892,6 +943,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="이미지 전체가 글자 — text-only 묶음으로 (base 불필요)")
     p.add_argument("--same-pattern", action="store_true",
                    help="무리 전체가 같은 스타일")
+    p.add_argument("--unify-boxes", action="store_true",
+                   help="text 상자(주입 위치)를 슬롯별 표준 상자로 통일 — "
+                        "일괄 위치 조정용. crop·source 는 실측 유지")
     p.add_argument("--row", nargs=2, action="append", metavar=("N", "ROLE"),
                    help="N번째 줄 역할: ref(원문 유지·앵커)|replace(지우고 주입)|ignore")
     p.add_argument("--multicolumn", action="store_true",

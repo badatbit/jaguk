@@ -201,12 +201,31 @@ def flatten_row(r: dict) -> dict:
         "overflow": _s(r.get("overflow")),
         "fit": _s(r.get("fit")),
         "catalog": _s(r.get("catalog")),
+        "slot": _s(r.get("slot")),
     }
 
 
 def flat_rows(data: dict) -> list[dict]:
-    """일반 행 + text-only 전개 — 렌더·그림이 보는 전체 목록."""
-    return [flatten_row(r) for r in rows(data) + expand_catalogs(data)]
+    """일반 행 + text-only 전개 — 렌더·그림이 보는 전체 목록.
+
+    행에 text 상자 대신 "slot" 인덱스만 있으면, 그 파일에 걸린 규칙의
+    "slots"(그룹이 슬롯당 1개만 소유하는 표준 상자)에서 채운다 — 주입
+    위치의 단일 소스는 규칙이다 (set --unify-boxes --apply 가 만든다).
+    """
+    rules_map = rules(data)
+    out = []
+    for r in rows(data) + expand_catalogs(data):
+        flat = flatten_row(r)
+        slot = r.get("slot")
+        if slot is not None and not r.get("text"):
+            _, rule = match_rule(rules_map, r.get("file", ""))
+            slots = rule.get("slots") or []
+            if 0 <= slot < len(slots):
+                x, y, w, h = slots[slot]
+                flat["text_x"], flat["text_y"] = str(x), str(y)
+                flat["text_w"], flat["text_h"] = str(w), str(h)
+        out.append(flat)
+    return out
 
 
 # ---- rules (jaguk set 이 기록하는 파일/디렉토리 처리 규칙) -------------------
