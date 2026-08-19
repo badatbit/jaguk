@@ -39,7 +39,10 @@
           background: repeating-conic-gradient(#202228 0 25%, #191b20 0 50%)
                       0 0 / 24px 24px; }
   #stage { position: relative; display: inline-block; }
-  #stage img { display: block; image-rendering: pixelated; }
+  /* 이미지 바운드리 — outline 은 레이아웃을 밀지 않아 상자 좌표가 안 어긋난다.
+     투명 스프라이트에서 캔버스 경계가 보이도록 항상 그린다. */
+  #stage img { display: block; image-rendering: pixelated;
+               outline: 1px solid rgba(110, 168, 255, .55); }
   .box { position: absolute; cursor: pointer; }
   .box.crop { border: 1px solid var(--crop); }
   .box.text { border: 1px dashed var(--text); }
