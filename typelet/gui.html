@@ -52,7 +52,7 @@
   .box.sel  { outline: 2px solid var(--accent); }
   .box .tag { position: absolute; top: -16px; left: -1px; font-size: 10px;
               background: rgba(0,0,0,.75); padding: 0 4px; white-space: nowrap; }
-  #props { width: 340px; overflow-y: auto; background: var(--panel);
+  #props { width: 420px; overflow-y: auto; background: var(--panel);
            border-left: 1px solid var(--line); padding: 10px; }
   #props h3 { margin: 14px 0 6px; font-size: 12px; color: var(--accent);
               border-bottom: 1px solid var(--line); padding-bottom: 3px; }
@@ -406,10 +406,8 @@ function renderBoxList(pane) {
   pane.appendChild(el("h3", "", `상자 목록 (${detail.rows.length}행)`));
   const t = el("table");
   const head = el("tr");
-  for (const h of ["id", "crop", "text", "내용"]) {
-    const td = el("td", "k", h);
-    td.style.width = "";
-    head.appendChild(td);
+  for (const h of ["id", "crop", "text", "원문 jp", "번역 ko"]) {
+    head.appendChild(el("td", "k", h));
   }
   t.appendChild(head);
   for (const row of detail.rows) {
@@ -418,15 +416,15 @@ function renderBoxList(pane) {
     tr.onmouseenter = () => tr.style.background = "#262a33";
     tr.onmouseleave = () => tr.style.background = "";
     tr.onclick = () => select(row.box_id);
-    const content = row._problem
-      ? "⚠" + row._problem
-      : (row.ko_text || row.jp_text || "");
-    for (const value of [row.box_id, rectLabel(row, "crop_"),
-                         rectLabel(row, "text_"), content]) {
+    const ko = row.ko_text || (row._problem ? "⚠" + row._problem : "");
+    const cells = [row.box_id, rectLabel(row, "crop_"),
+                   rectLabel(row, "text_"), row.jp_text || "—", ko];
+    cells.forEach((value, index) => {
       const td = el("td", "", value);
-      if (row._problem && value === content) td.style.color = "#ff8a7a";
+      if (index === 4 && row._problem) td.style.color = "#ff8a7a";
+      if (index === 4 && !row._problem) td.style.color = "var(--accent)";
       tr.appendChild(td);
-    }
+    });
     t.appendChild(tr);
   }
   pane.appendChild(t);
