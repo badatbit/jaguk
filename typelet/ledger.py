@@ -217,13 +217,26 @@ def flat_rows(data: dict) -> list[dict]:
     for r in rows(data) + expand_catalogs(data):
         flat = flatten_row(r)
         slot = r.get("slot")
-        if slot is not None and not r.get("text"):
+        if slot is not None:
             _, rule = match_rule(rules_map, r.get("file", ""))
             slots = rule.get("slots") or []
             if 0 <= slot < len(slots):
-                x, y, w, h = slots[slot]
-                flat["text_x"], flat["text_y"] = str(x), str(y)
-                flat["text_w"], flat["text_h"] = str(w), str(h)
+                spec = slots[slot]
+                if isinstance(spec, list):          # 구형 — text 상자만
+                    spec = {"text": spec}
+                if not r.get("text") and spec.get("text"):
+                    x, y, w, h = spec["text"]
+                    flat["text_x"], flat["text_y"] = str(x), str(y)
+                    flat["text_w"], flat["text_h"] = str(w), str(h)
+                if not r.get("crop") and spec.get("crop"):
+                    x, y, w, h = spec["crop"]
+                    flat["crop_x"], flat["crop_y"] = str(x), str(y)
+                    flat["crop_w"], flat["crop_h"] = str(w), str(h)
+                    flat["crop_src"] = "slot"
+                if not r.get("source") and spec.get("source"):
+                    x, y, w, h = spec["source"]
+                    flat["source_x"], flat["source_y"] = str(x), str(y)
+                    flat["source_box_w"], flat["source_box_h"] = str(w), str(h)
         out.append(flat)
     return out
 

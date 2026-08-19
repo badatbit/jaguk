@@ -446,16 +446,11 @@ def apply_rule(project: Project, data: dict, key: str, rule: dict) -> None:
                   f"필요하니 `jaguk extract --only {key}` 로 다시 뽑으세요")
         targets = [r for r in data["rows"] if under(r.get("file", ""))]
 
-    if rule.get("same_pattern"):
-        slots, moved = _unify_boxes(targets)
-        if moved:
-            print(f"적용(same-pattern·상자 통일): 슬롯 {slots}개에서 "
-                  f"상자 {moved}개를 중앙값으로 정렬 (OCR 씨앗 행만)")
-
-    if rule.get("unify_boxes"):
-        slots, moved = _unify_text_boxes(targets, rule)
-        print(f"적용(unify-boxes): 규칙에 슬롯 {slots}개 기록, 행 {moved}개는 "
-              f"slot 참조로 정규화 (crop·source 는 실측 유지)")
+    if rule.get("same_pattern") or rule.get("unify_boxes"):
+        slots, moved = _normalize_slots(targets, rule)
+        if slots:
+            print(f"적용(패턴 정규화): 규칙에 슬롯 {slots}개 — text 중앙값·"
+                  f"crop/source 합집합. 행 {moved}개는 slot 참조만 갖는다")
 
     # 스타일 통일 — --style 이 있으면 그것으로, --same-pattern 만 있으면
     # 기존 행들의 다수결 스타일로 무리 전체를 맞춘다
@@ -476,105 +471,87 @@ def apply_rule(project: Project, data: dict, key: str, rule: dict) -> None:
               f"(대상 {len(targets)}행)")
 
 
-def _unify_boxes(targets: list[dict]) -> tuple[int, int]:
-    """same-pattern 무리의 상자 위치·크기 통일 — OCR 지터 제거.
+def _normalize_slots(targets: list[dict], rule: dict) -> tuple[int, int]:
+    """same-pattern 무리의 상자들을 규칙의 slots 로 정규화 — 슬롯당 1개.
 
-    같은 레이아웃이 파일마다 반복되는 무리에서, OCR 이 잡은 상자는 파일마다
-    몇 px 씩 흔들린다. 파일 간 겹치는 상자(IoU > 0.5)를 슬롯으로 묶어
-    text·source·crop 을 성분별 중앙값으로 정렬한다.
+    파일마다 반복되는 같은 자리(IoU>0.5)를 슬롯으로 묶어 규칙 "slots" 에
+    {"text", "crop", "source"} 를 기록하고, 행은 slot 인덱스만 갖는다
+    (flat_rows 가 채움). 일괄 위치 조정 = 규칙의 slots 만 수정.
 
-    **OCR 씨앗 행(notes 'OCR seed'·'jaguk extract')만 만진다** — 실측·이관·
-    손질 상자는 근거가 있는 값이라 통일 대상이 아니다. (슬롯, 조정 행 수)
+    표준화 방식은 상자 성격을 따른다:
+      text    중앙값 — 주입 위치 (슬롯 중심 편차는 실측상 2~4px 지터)
+      crop    합집합 — 지우기는 모든 판의 원문 잉크를 덮어야 한다
+      source  합집합 — 이 슬롯에서 원문이 나타나는 범위
     """
     from statistics import median
+
+    slots_old = rule.get("slots") or []
+
+    def as_spec(entry):
+        return {"text": entry} if isinstance(entry, list) else dict(entry)
+
+    def effective(row, key):
+        value = row.get(key)
+        if key == "crop":
+            value = (row.get("crop") or {}).get("rect")
+        if value:
+            return value
+        index = row.get("slot")
+        if index is not None and 0 <= index < len(slots_old):
+            return as_spec(slots_old[index]).get(key)
+        return None
 
     def anchor(row):
-        return row.get("text") or row.get("source") \
-            or (row.get("crop") or {}).get("rect")
+        return effective(row, "text") or effective(row, "source")             or effective(row, "crop")
 
-    seeds = [r for r in targets
-             if (r.get("notes") or "").startswith(("OCR seed", "jaguk"))
-             and anchor(r)]
     clusters: list[list[dict]] = []
-    for row in seeds:
-        x, y, w, h = anchor(row)
-        box = {"x": x, "y": y, "w": w, "h": h}
+    for row in targets:
+        box = anchor(row)
+        if not box:
+            continue
+        b = {"x": box[0], "y": box[1], "w": box[2], "h": box[3]}
         for cluster in clusters:
-            cx, cy, cw, ch = anchor(cluster[0])
-            if ocrmod._overlaps(box, {"x": cx, "y": cy, "w": cw, "h": ch}):
+            c = anchor(cluster[0])
+            if ocrmod._overlaps(b, {"x": c[0], "y": c[1], "w": c[2], "h": c[3]}):
                 cluster.append(row)
                 break
         else:
             clusters.append([row])
+    clusters.sort(key=lambda c: anchor(c[0])[0])    # 왼쪽부터 안정된 순번
 
-    moved = 0
-    slots = 0
-    for cluster in clusters:
-        if len(cluster) < 2:
-            continue                     # 혼자면 통일할 기준이 없다
-        slots += 1
-        for key in ("text", "source"):
-            rects = [r[key] for r in cluster if r.get(key)]
-            if len(rects) < 2:
-                continue
-            canon = [int(median(c)) for c in zip(*rects)]
-            for r in cluster:
-                if r.get(key) and r[key] != canon:
-                    r[key] = list(canon)
-                    moved += 1
-        crops = [r["crop"]["rect"] for r in cluster
-                 if (r.get("crop") or {}).get("rect")]
-        if len(crops) >= 2:
-            canon = [int(median(c)) for c in zip(*crops)]
-            for r in cluster:
-                if (r.get("crop") or {}).get("rect") and r["crop"]["rect"] != canon:
-                    r["crop"]["rect"] = list(canon)
-                    moved += 1
-    return slots, moved
+    def union(rects):
+        x0 = min(r[0] for r in rects)
+        y0 = min(r[1] for r in rects)
+        x1 = max(r[0] + r[2] for r in rects)
+        y1 = max(r[1] + r[3] for r in rects)
+        return [x0, y0, x1 - x0, y1 - y0]
 
-
-def _unify_text_boxes(targets: list[dict], rule: dict) -> tuple[int, int]:
-    """text 상자(주입 위치)를 **규칙의 slots 로 정규화** — 명시적 opt-in.
-
-    IoU>0.5 로 겹치는 text 상자를 슬롯으로 묶어, 표준 상자
-    [중심 중앙값 − 폭 중앙값/2, y, 폭 중앙값, h] 를 **규칙의 "slots" 에
-    슬롯당 1개만** 기록한다. 행은 text 를 지우고 slot 인덱스만 갖는다
-    (flat_rows 가 규칙에서 채움) — 나중에 주입 위치를 일괄 조정할 땐
-    규칙의 slots 만 고치면 전 행에 반영된다. crop(지울 범위)·source
-    (원문 실측)는 근거 값이므로 건드리지 않는다.
-    """
-    from statistics import median
-
-    boxed = [r for r in targets if r.get("text")]
-    clusters: list[list[dict]] = []
-    for row in boxed:
-        x, y, w, h = row["text"]
-        box = {"x": x, "y": y, "w": w, "h": h}
-        for cluster in clusters:
-            cx, cy, cw, ch = cluster[0]["text"]
-            if ocrmod._overlaps(box, {"x": cx, "y": cy, "w": cw, "h": ch}):
-                cluster.append(row)
-                break
-        else:
-            clusters.append([row])
-    clusters.sort(key=lambda c: c[0]["text"][0])    # 왼쪽부터 안정된 순번
-
-    slots = []
+    new_slots = []
     moved = 0
     for index, cluster in enumerate(clusters):
-        centers = [r["text"][0] + r["text"][2] / 2 for r in cluster]
-        widths = [r["text"][2] for r in cluster]
-        width = int(median(widths))
-        slots.append([round(median(centers) - width / 2),
-                      int(median(r["text"][1] for r in cluster)),
-                      width,
-                      int(median(r["text"][3] for r in cluster))])
+        spec = {}
+        texts = [effective(r, "text") for r in cluster if effective(r, "text")]
+        if texts:
+            centers = [t[0] + t[2] / 2 for t in texts]
+            width = int(median(t[2] for t in texts))
+            spec["text"] = [round(median(centers) - width / 2),
+                            int(median(t[1] for t in texts)), width,
+                            int(median(t[3] for t in texts))]
+        crops = [effective(r, "crop") for r in cluster if effective(r, "crop")]
+        if crops:
+            spec["crop"] = union(crops)
+        sources = [effective(r, "source") for r in cluster
+                   if effective(r, "source")]
+        if sources:
+            spec["source"] = union(sources)
+        new_slots.append(spec)
         for r in cluster:
             r["slot"] = index
-            r.pop("text", None)
+            for key in ("text", "source", "crop"):
+                r.pop(key, None)
             moved += 1
-    rule["slots"] = slots
-    return len(slots), moved
+    rule["slots"] = new_slots
+    return len(new_slots), moved
 
 
 match_rule = ledgermod.match_rule       # 규칙 매칭 — ledger 모듈이 단일 소스

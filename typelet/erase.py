@@ -33,21 +33,31 @@ from .config import Project
 def _rects_by_file(data: dict, only: str) -> dict[str, list[tuple[int, int, int, int]]]:
     rules_map = ledgermod.rules(data)
     grouped: dict[str, list[tuple[int, int, int, int]]] = defaultdict(list)
-    for r in ledgermod.rows(data):
-        relative = r.get("file") or ""
+
+    def rect_of(flat, prefix, wh=("w", "h")):
+        keys = (f"{prefix}x", f"{prefix}y", f"{prefix}{wh[0]}", f"{prefix}{wh[1]}")
+        values = [flat.get(k, "") for k in keys]
+        if all(v != "" for v in values):
+            return tuple(int(v) for v in values)
+        return None
+
+    # flat_rows 를 쓴다 — slot 참조 행의 crop/source 를 규칙 slots 에서 채운다
+    for flat in ledgermod.flat_rows(data):
+        relative = flat.get("file") or ""
         if only and only.lower() not in relative.lower():
             continue
-        if (r.get("status") or "") == "no_inject":
+        if (flat.get("status") or "") == "no_inject":
             continue
-        # text-only(이미지 전체가 글자 — blank 베이스라 지울 것이 없다)·
+        if (flat.get("base") or "") == "blank":
+            continue                     # text-only — 지울 것이 없다
         # ignore 규칙이 걸린 파일은 낡은 행이 남아 있어도 지우지 않는다
         _, rule = ledgermod.match_rule(rules_map, relative)
         if ledgermod.rule_mode(rule) in ("text-only", "ignore"):
             continue
-        crop = r.get("crop") or {}
-        rect = crop.get("rect") or r.get("source")
+        rect = rect_of(flat, "crop_") \
+            or rect_of(flat, "source_", ("box_w", "box_h"))
         if rect:
-            grouped[relative].append(tuple(int(v) for v in rect))
+            grouped[relative].append(rect)
     return grouped
 
 
