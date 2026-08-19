@@ -721,6 +721,15 @@ def cmd_inject(args) -> int:
                       on_original=args.on_original)
 
 
+def cmd_recompose(args) -> int:
+    from . import recompose
+    project = load_project(args.config)
+    if args.restore:
+        return recompose.run_restore(project, outdir=args.outdir,
+                                     only=args.only)
+    return recompose.run(project, only=args.only)
+
+
 def cmd_gui(args) -> int:
     from . import gui
     project = load_project(args.config)
@@ -847,6 +856,15 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("status", help="진행 상황")
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("recompose",
+                       help="아틀라스 재조합/복원 — 원장 recompose 스펙 기반")
+    p.add_argument("--only", default="")
+    p.add_argument("--restore", action="store_true",
+                   help="injected 를 게임 네이티브로 복원해 별도 출력")
+    p.add_argument("--outdir", default="",
+                   help="--restore 출력 디렉토리 (기본: <injected>-native)")
+    p.set_defaults(func=cmd_recompose)
 
     p = sub.add_parser("gui", help="검수용 웹 툴 (localhost)")
     p.add_argument("--port", type=int, default=52485,
