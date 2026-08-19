@@ -449,8 +449,10 @@ async function postOp(url, body) {
       headers: body ? {"Content-Type": "application/json"} : undefined,
       body: body ? JSON.stringify(body) : undefined});
     const data = await res.json().catch(() => ({}));
-    return {ok: res.ok && data.log !== undefined,
-            log: data.log || data.error || ("HTTP " + res.status)};
+    let log = data.log || data.error || ("HTTP " + res.status);
+    if (!res.ok && (res.status === 501 || res.status === 404))
+      log += " — 서버가 옛 코드입니다. jaguk gui 를 재시작(Ctrl+C 후 다시)하세요";
+    return {ok: res.ok && data.log !== undefined, log};
   } catch (error) {
     return {ok: false, log: String(error) + " — 서버 재시작 필요할 수 있음"};
   }
