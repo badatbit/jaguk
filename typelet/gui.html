@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>jaguk gui</title>
+<style>
+  :root {
+    --bg: #17181c; --panel: #1e2026; --line: #2c2f38; --fg: #d6d9e0;
+    --dim: #8b90a0; --accent: #58a6ff; --crop: #ff3dae; --text: #ffffff;
+    --src: #00c8ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 13px/1.5 "Malgun Gothic", sans-serif; height: 100vh;
+         display: flex; flex-direction: column; overflow: hidden; }
+  header { display: flex; align-items: center; gap: 12px; padding: 8px 14px;
+           background: var(--panel); border-bottom: 1px solid var(--line); }
+  header .title { font-weight: bold; color: var(--accent); }
+  header .file { color: var(--dim); overflow: hidden; text-overflow: ellipsis;
+                 white-space: nowrap; flex: 1; }
+  .modes button { background: none; border: 1px solid var(--line);
+                  color: var(--dim); padding: 4px 10px; cursor: pointer; }
+  .modes button.on { color: var(--fg); border-color: var(--accent);
+                     background: #24344d; }
+  main { flex: 1; display: flex; min-height: 0; }
+  #tree { width: 300px; overflow-y: auto; background: var(--panel);
+          border-right: 1px solid var(--line); padding: 8px 0; }
+  #tree .group { padding: 5px 12px; cursor: pointer; font-weight: bold; }
+  #tree .group:hover { background: #262a33; }
+  #tree .group .n { color: var(--dim); font-weight: normal; }
+  #tree .item { padding: 3px 12px 3px 26px; cursor: pointer; white-space: nowrap;
+                overflow: hidden; text-overflow: ellipsis; color: var(--dim); }
+  #tree .item:hover { background: #262a33; color: var(--fg); }
+  #tree .item.sel { background: #24344d; color: var(--fg); }
+  #tree .item .ko { color: var(--accent); }
+  #tree .sect { padding: 8px 12px 2px; color: var(--dim); font-size: 11px;
+                text-transform: uppercase; letter-spacing: .08em; }
+  #view { flex: 1; overflow: auto; padding: 24px;
+          background: repeating-conic-gradient(#202228 0 25%, #191b20 0 50%)
+                      0 0 / 24px 24px; }
+  #stage { position: relative; display: inline-block; }
+  #stage img { display: block; image-rendering: pixelated; }
+  .box { position: absolute; cursor: pointer; }
+  .box.crop { border: 1px solid var(--crop); }
+  .box.text { border: 1px dashed var(--text); }
+  .box.src  { border: 1px solid var(--src); }
+  .box.sel  { outline: 2px solid var(--accent); }
+  .box .tag { position: absolute; top: -16px; left: -1px; font-size: 10px;
+              background: rgba(0,0,0,.75); padding: 0 4px; white-space: nowrap; }
+  #props { width: 340px; overflow-y: auto; background: var(--panel);
+           border-left: 1px solid var(--line); padding: 10px; }
+  #props h3 { margin: 14px 0 6px; font-size: 12px; color: var(--accent);
+              border-bottom: 1px solid var(--line); padding-bottom: 3px; }
+  #props h3:first-child { margin-top: 0; }
+  #props table { width: 100%; border-collapse: collapse; }
+  #props td { padding: 2px 4px; vertical-align: top; word-break: break-all; }
+  #props td.k { color: var(--dim); width: 118px; }
+  #props .empty { color: var(--dim); padding: 20px 6px; }
+  .zoom { margin-left: auto; display: flex; gap: 4px; }
+  .zoom button { background: none; border: 1px solid var(--line);
+                 color: var(--dim); width: 26px; cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">jaguk</span>
+  <span class="modes" id="modes"></span>
+  <span class="file" id="curfile">파일을 선택하세요</span>
+  <span class="zoom">
+    <button onclick="setZoom(zoom/1.5)">−</button>
+    <button onclick="setZoom(1)">1x</button>
+    <button onclick="setZoom(zoom*1.5)">＋</button>
+  </span>
+</header>
+<main>
+  <nav id="tree">불러오는 중…</nav>
+  <section id="view"><div id="stage"></div></section>
+  <aside id="props"><div class="empty">crop-box / text-box 모드에서 상자를
+    클릭하면 속성이 표시됩니다.</div></aside>
+</main>
+<script>
+const MODES = ["원본", "erased", "injected", "crop-box", "text-box"];
+const IMG_KIND = {"원본": "original", "erased": "erased", "injected": "injected",
+                  "crop-box": "original", "text-box": "original"};
+let mode = "원본", detail = null, zoom = 1, selected = null;
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+async function loadTree() {
+  const tree = await (await fetch("/api/tree")).json();
+  const nav = document.getElementById("tree");
+  nav.textContent = "";
+  if (tree.catalogs.length) nav.appendChild(el("div", "sect", "카탈로그"));
+  for (const cat of tree.catalogs) {
+    const group = el("div", "group");
+    group.appendChild(document.createTextNode(cat.name + " "));
+    group.appendChild(el("span", "n", `(${cat.count})`));
+    const body = el("div");
+    body.style.display = "none";
+    group.onclick = () =>
+      body.style.display = body.style.display === "none" ? "" : "none";
+    for (const entry of cat.entries) {
+      const item = el("div", "item");
+      item.dataset.file = entry.file;
+      item.appendChild(document.createTextNode(entry.name.split(".")[0] + " "));
+      item.appendChild(el("span", "ko", entry.ko || entry.jp));
+      item.onclick = () => openFile(entry.file, item);
+      body.appendChild(item);
+    }
+    nav.appendChild(group);
+    nav.appendChild(body);
+  }
+  if (tree.files.length) nav.appendChild(el("div", "sect", "파일 (행)"));
+  for (const f of tree.files) {
+    const item = el("div", "item", `${f.file} (${f.rows})`);
+    item.dataset.file = f.file;
+    item.style.paddingLeft = "12px";
+    item.onclick = () => openFile(f.file, item);
+    nav.appendChild(item);
+  }
+}
+
+function renderModes() {
+  const bar = document.getElementById("modes");
+  bar.textContent = "";
+  for (const m of MODES) {
+    const b = el("button", mode === m ? "on" : "", m);
+    b.onclick = () => { mode = m; renderModes(); renderStage(); };
+    bar.appendChild(b);
+  }
+}
+
+async function openFile(file, item) {
+  document.querySelectorAll("#tree .item.sel")
+    .forEach(n => n.classList.remove("sel"));
+  if (item) item.classList.add("sel");
+  detail = await (await fetch("/api/file?path=" + encodeURIComponent(file))).json();
+  selected = null;
+  document.getElementById("curfile").textContent = file;
+  renderStage();
+  renderProps();
+}
+
+function setZoom(z) { zoom = Math.min(8, Math.max(0.25, z)); renderStage(); }
+
+function boxDiv(cls, rect, label, onclick) {
+  const [x, y, w, h] = rect;
+  const div = el("div", "box " + cls);
+  div.style.left = x * zoom + "px";
+  div.style.top = y * zoom + "px";
+  div.style.width = Math.max(1, w * zoom) + "px";
+  div.style.height = Math.max(1, h * zoom) + "px";
+  if (label) {
+    const tag = el("span", "tag", label);
+    div.appendChild(tag);
+  }
+  if (onclick) div.onclick = (ev) => { ev.stopPropagation(); onclick(); };
+  return div;
+}
+
+function num(v) { const n = parseInt(v, 10); return isNaN(n) ? null : n; }
+
+function rowRect(row, prefix) {
+  const ks = prefix === "source"
+    ? ["source_x", "source_y", "source_box_w", "source_box_h"]
+    : [prefix + "_x", prefix + "_y", prefix + "_w", prefix + "_h"];
+  const vals = ks.map(k => num(row[k]));
+  return vals.some(v => v === null) ? null : vals;
+}
+
+function renderStage() {
+  const stage = document.getElementById("stage");
+  stage.textContent = "";
+  if (!detail) return;
+  const kind = IMG_KIND[mode];
+  if (!detail.images[kind]) {
+    stage.appendChild(el("div", "", `(${kind} 이미지 없음)`));
+    return;
+  }
+  const img = document.createElement("img");
+  img.src = "/img/" + kind + "/" + detail.file;
+  img.onload = () => { img.style.width = img.naturalWidth * zoom + "px"; };
+  stage.appendChild(img);
+
+  if (mode !== "crop-box" && mode !== "text-box") return;
+  for (const row of detail.rows) {
+    const id = row.box_id;
+    if (mode === "crop-box") {
+      const crop = rowRect(row, "crop");
+      const src = rowRect(row, "source");
+      if (src) stage.appendChild(boxDiv("src", src, "", () => select(id)));
+      if (crop) {
+        const div = boxDiv("crop", crop, id, () => select(id));
+        if (selected === id) div.classList.add("sel");
+        stage.appendChild(div);
+      }
+    } else {
+      const text = rowRect(row, "text");
+      if (text) {
+        const div = boxDiv("text", text, id + " " + (row.style || ""),
+                           () => select(id));
+        if (selected === id) div.classList.add("sel");
+        stage.appendChild(div);
+      }
+    }
+  }
+}
+
+function select(id) { selected = id; renderStage(); renderProps(); }
+
+function table(obj, skipEmpty = true) {
+  const t = el("table");
+  for (const [k, v] of Object.entries(obj)) {
+    if (skipEmpty && (v === null || v === "" || v === undefined)) continue;
+    const tr = el("tr");
+    tr.appendChild(el("td", "k", k));
+    tr.appendChild(el("td", "",
+      typeof v === "object" ? JSON.stringify(v) : String(v)));
+    t.appendChild(tr);
+  }
+  return t;
+}
+
+function renderProps() {
+  const pane = document.getElementById("props");
+  pane.textContent = "";
+  if (!detail || !selected) {
+    pane.appendChild(el("div", "empty",
+      "crop-box / text-box 모드에서 상자를 클릭하면 속성이 표시됩니다."));
+    return;
+  }
+  const row = detail.rows.find(r => r.box_id === selected);
+  if (!row) return;
+
+  // ① inline — 일반 행이면 구조형 행, 카탈로그 항목이면 entry
+  const isCatalogRow = !!row.catalog;
+  pane.appendChild(el("h3", "", "Inline — " + selected));
+  if (isCatalogRow && detail.entry) {
+    pane.appendChild(table(detail.entry));
+  } else if (detail.raw[selected]) {
+    pane.appendChild(table(detail.raw[selected]));
+  } else {
+    pane.appendChild(table(row));
+  }
+
+  // ② 카탈로그 기본값 (해당하면)
+  if (isCatalogRow && detail.catalog) {
+    pane.appendChild(el("h3", "", "Catalog — " + detail.catalog.name));
+    pane.appendChild(table(detail.catalog));
+  }
+
+  // ③ style — base 사슬을 따라 상위 style 을 아래로 계속 표시
+  let styleName = row.style;
+  const seen = new Set();
+  while (styleName && detail.styles[styleName] && !seen.has(styleName)) {
+    seen.add(styleName);
+    const style = detail.styles[styleName];
+    pane.appendChild(el("h3", "",
+      (seen.size === 1 ? "Style — " : "상위 Style — ") + styleName));
+    pane.appendChild(table(style));
+    styleName = style.base;
+  }
+
+  // ④ 규칙 (파일 단위)
+  if (detail.rule && Object.keys(detail.rule).length) {
+    pane.appendChild(el("h3", "", "규칙 (set)"));
+    pane.appendChild(table(detail.rule));
+  }
+}
+
+renderModes();
+loadTree();
+</script>
+</body>
+</html>

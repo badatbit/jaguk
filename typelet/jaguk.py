@@ -24,6 +24,8 @@
     erase       텍스트 지우기 — 무문자 베이스 생성
     inject      번역 주입 — 렌더
     status      진행 상황
+    gui         검수용 웹 툴 — 파일/그룹 트리 · 원본/erased/injected/상자 보기
+                · 상자 클릭 → inline/catalog/style(상위 사슬) 속성
 """
 
 from __future__ import annotations
@@ -633,6 +635,12 @@ def cmd_inject(args) -> int:
                       on_original=args.on_original)
 
 
+def cmd_gui(args) -> int:
+    from . import gui
+    project = load_project(args.config)
+    return gui.run(project, port=args.port, open_browser=not args.no_browser)
+
+
 def cmd_status(args) -> int:
     from collections import Counter
     project = load_project(args.config)
@@ -750,6 +758,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("status", help="진행 상황")
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("gui", help="검수용 웹 툴 (localhost)")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--no-browser", action="store_true",
+                   help="브라우저를 자동으로 열지 않는다")
+    p.set_defaults(func=cmd_gui)
 
     args = parser.parse_args(argv)
     return args.func(args)
