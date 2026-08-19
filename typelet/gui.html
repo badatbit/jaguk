@@ -597,13 +597,20 @@ function renderProps() {
 
 // ---- 스테이지 편집 상호작용 (add 드래그 / split 클릭) ----
 const stageEl = document.getElementById("stage");
-let dragStart = null, dragDiv = null;
+let dragStart = null, dragDiv = null, splitGuide = null;
+let pendingMove = null;                  // rAF 스로틀 — 리플로우 폭주 방지
 
 function stagePos(ev) {
   const r = stageEl.getBoundingClientRect();
   const s = pxScale();
   return [Math.round((ev.clientX - r.left) / s),
           Math.round((ev.clientY - r.top) / s)];
+}
+
+function busy(text) {
+  const pane = document.getElementById("props");
+  pane.textContent = "";
+  pane.appendChild(el("div", "empty", text));
 }
 
 stageEl.addEventListener("mousedown", ev => {
@@ -615,18 +622,45 @@ stageEl.addEventListener("mousedown", ev => {
   stageEl.appendChild(dragDiv);
 });
 
-stageEl.addEventListener("mousemove", ev => {
-  if (!dragDiv) return;
-  const [x, y] = stagePos(ev);
-  const s = pxScale();
-  const rx = Math.min(dragStart[0], x), ry = Math.min(dragStart[1], y);
-  dragDiv.style.left = rx * s + "px";
-  dragDiv.style.top = ry * s + "px";
-  dragDiv.style.width = Math.abs(x - dragStart[0]) * s + "px";
-  dragDiv.style.height = Math.abs(y - dragStart[1]) * s + "px";
+function onMove(ev) {
+  if (pendingMove) { pendingMove.ev = ev; return; }
+  pendingMove = {ev};
+  requestAnimationFrame(() => {
+    const e = pendingMove.ev;
+    pendingMove = null;
+    const s = pxScale();
+    if (dragDiv && dragStart) {
+      const [x, y] = stagePos(e);
+      dragDiv.style.left = Math.min(dragStart[0], x) * s + "px";
+      dragDiv.style.top = Math.min(dragStart[1], y) * s + "px";
+      dragDiv.style.width = Math.abs(x - dragStart[0]) * s + "px";
+      dragDiv.style.height = Math.abs(y - dragStart[1]) * s + "px";
+    }
+    if (editMode === "split" && selected) {
+      if (!splitGuide) {
+        splitGuide = el("div");
+        // transform 만 갱신 — 레이아웃 재계산 없이 60fps 로 따라온다
+        splitGuide.style.cssText =
+          "position:absolute;top:0;bottom:0;width:1px;background:var(--accent);" +
+          "pointer-events:none;will-change:transform";
+        stageEl.appendChild(splitGuide);
+      }
+      const r = stageEl.getBoundingClientRect();
+      splitGuide.style.transform =
+        `translateX(${e.clientX - r.left}px)`;
+    } else if (splitGuide) {
+      splitGuide.remove();
+      splitGuide = null;
+    }
+  });
+}
+stageEl.addEventListener("mousemove", onMove);
+stageEl.addEventListener("mouseleave", () => {
+  if (splitGuide) { splitGuide.remove(); splitGuide = null; }
 });
 
-stageEl.addEventListener("mouseup", async ev => {
+// 스테이지 밖에서 마우스를 놓아도 임시 상자가 남지 않게 (버벅임 원인)
+window.addEventListener("mouseup", ev => {
   if (!dragDiv) return;
   const [x, y] = stagePos(ev);
   const rect = [Math.min(dragStart[0], x), Math.min(dragStart[1], y),
@@ -635,19 +669,22 @@ stageEl.addEventListener("mouseup", async ev => {
   dragDiv = null;
   dragStart = null;
   if (rect[2] < 3 || rect[3] < 3) return;      // 너무 작으면 취소
-  finishOp(await postOp("/api/box/add?path=" +
-    encodeURIComponent(detail.file), {rect}));
+  busy("상자 추가 중… (원문 판독 포함)");
+  postOp("/api/box/add?path=" + encodeURIComponent(detail.file), {rect})
+    .then(finishOp);
 });
 
 // split — 캡처 단계에서 가로챈다 (상자 자체의 클릭 핸들러보다 먼저)
-stageEl.addEventListener("click", async ev => {
+stageEl.addEventListener("click", ev => {
   if (editMode !== "split" || !selected || !detail) return;
   ev.stopPropagation();
   ev.preventDefault();
   const [x] = stagePos(ev);
-  finishOp(await postOp("/api/box/split?path=" +
-    encodeURIComponent(detail.file) + "&id=" + encodeURIComponent(selected),
-    {at: x}));
+  const id = selected;
+  if (splitGuide) { splitGuide.remove(); splitGuide = null; }
+  busy("나누는 중… (반쪽별 원문 재판독 포함, 수 초)");
+  postOp("/api/box/split?path=" + encodeURIComponent(detail.file) +
+         "&id=" + encodeURIComponent(id), {at: x}).then(finishOp);
 }, true);
 
 renderModes();
