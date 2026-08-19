@@ -281,15 +281,32 @@ def _terms_from_tsv(path) -> dict[str, str]:
 
 def _terms_from_json(path) -> dict[str, str]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(data, dict) and isinstance(data.get("names"), list):
-        # spot.json 꼴 — {"names": [{"ja", "ko", "tr": {"ko": {"status"}}}]}
+    # 레코드 목록 — (ja|jp) + ko 를 가진 dict 들. furaiki3 자산들이 전부
+    # 이 패턴이다: spot.json({"names":[…]}), image_text.json({"rows":[…]}),
+    # glossary/article/exe_text.json(최상위 list). tr.ko.status 가 있으면
+    # ok 만 쓴다 (보류 번역 제외).
+    records = None
+    if isinstance(data, list):
+        records = data
+    elif isinstance(data, dict):
+        for key in ("names", "rows"):
+            if isinstance(data.get(key), list):
+                records = data[key]
+                break
+    if records is not None:
         out = {}
-        for rec in data["names"]:
-            src, dst = rec.get("ja"), rec.get("ko")
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            src = rec.get("ja") or rec.get("jp")
+            dst = rec.get("ko")
             status = (rec.get("tr") or {}).get("ko", {}).get("status")
-            if src and dst and status in (None, "ok"):
+            if src and isinstance(dst, str) and dst.strip() \
+                    and status in (None, "ok"):
                 out[src] = dst
-        return out
+        if out:
+            return out
+        raise ValueError(f"{path}: 레코드에서 (ja|jp)+ko 쌍을 못 찾음")
     if isinstance(data, dict):
         out = {}
         for src, value in data.items():
