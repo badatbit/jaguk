@@ -513,13 +513,18 @@ def seed_ledger(project: Project, results: list[dict]) -> tuple[int, int]:
 
 
 def seed_rows(data: dict, results: list[dict]) -> tuple[int, int]:
-    """OCR 결과 → 원장 데이터에 씨앗 행 추가 (저장은 호출자 몫)."""
+    """OCR 결과 → 원장 데이터에 씨앗 행 추가 (저장은 호출자 몫).
+
+    중복 판정은 IoU 겹침 — 재실행 때 탐지 상자가 몇 px 달라져도(변형
+    파이프라인 변경 등) 같은 자리면 씨앗을 또 만들지 않는다."""
     rows = ledgermod.rows(data)
     existing_ids = {r.get("box_id") for r in rows}
-    existing_boxes = {
-        (r.get("file"), tuple(r.get("source") or ()))
-        for r in rows if r.get("source")
-    }
+    existing_boxes: dict[str, list[dict]] = {}
+    for r in rows:
+        if r.get("source"):
+            x, y, w, h = r["source"]
+            existing_boxes.setdefault(r["file"], []).append(
+                {"x": x, "y": y, "w": w, "h": h})
     counters: dict[str, int] = {}
     for bid in existing_ids:
         m = re.fullmatch(r"([a-z]+)(\d+)", bid or "")
@@ -533,7 +538,9 @@ def seed_rows(data: dict, results: list[dict]) -> tuple[int, int]:
         prefix = _id_prefix(relative)
         for line in entry["lines"]:
             box = [line["x"], line["y"], line["w"], line["h"]]
-            if (relative, tuple(box)) in existing_boxes:
+            candidate = {"x": box[0], "y": box[1], "w": box[2], "h": box[3]}
+            if any(_overlaps(candidate, kept)
+                   for kept in existing_boxes.get(relative, [])):
                 skipped += 1
                 continue
             counters[prefix] = counters.get(prefix, 0) + 1
@@ -542,7 +549,7 @@ def seed_rows(data: dict, results: list[dict]) -> tuple[int, int]:
                 counters[prefix] += 1
                 box_id = f"{prefix}{counters[prefix]}"
             existing_ids.add(box_id)
-            existing_boxes.add((relative, tuple(box)))
+            existing_boxes.setdefault(relative, []).append(candidate)
             rows.append({
                 "box_id": box_id,
                 "file": relative,
