@@ -827,6 +827,23 @@ def cmd_inject(args) -> int:
                       on_original=args.on_original)
 
 
+def cmd_drop(args) -> int:
+    """파일/디렉토리 제외 — ignore 규칙 기록 + 기존 행·항목 즉시 제거.
+
+    `set <경로> --ignore --apply` 의 축약이며 여러 경로를 한 번에 받는다.
+    이후 extract 는 이 경로를 OCR 조차 하지 않는다."""
+    project = load_project(args.config)
+    data = ledgermod.load(project)
+    rules = data.setdefault("rules", {})
+    for target in args.targets:
+        key = resolve_rule_key(project, target)
+        rules[key] = {"mode": "ignore"}
+        print(f"제외: {key}")
+        apply_rule(project, data, key, rules[key])
+    ledgermod.save(project, data)
+    return 0
+
+
 def cmd_recompose(args) -> int:
     from . import recompose
     project = load_project(args.config)
@@ -965,6 +982,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("status", help="진행 상황")
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("drop",
+                       help="파일/디렉토리 제외 — ignore 규칙 + 행·항목 즉시 제거")
+    p.add_argument("targets", nargs="+",
+                   help="originals 안의 파일/디렉토리 (여러 개 가능)")
+    p.set_defaults(func=cmd_drop)
 
     p = sub.add_parser("recompose",
                        help="아틀라스 재조합/복원 — 원장 recompose 스펙 기반")
