@@ -530,6 +530,23 @@ def box_split(project: Project, relative: str, box_id: str, at: int) -> str:
             f"{parts[1]['box_id']}({parts[1]['jp'] or '—'})")
 
 
+def drop_file(project: Project, relative: str) -> str:
+    """파일 제외 (jaguk drop 과 동일) — ignore 규칙 + 행·항목 즉시 제거."""
+    from contextlib import redirect_stdout
+    from io import StringIO
+
+    from . import jaguk as jagukmod
+    data = ledgermod.load(project)
+    rules = data.setdefault("rules", {})
+    rules[relative] = {"mode": "ignore"}
+    buffer = StringIO()
+    with redirect_stdout(buffer):
+        jagukmod.apply_rule(project, data, relative, rules[relative])
+    ledgermod.save(project, data)
+    _INJECT_CACHE.pop(relative, None)
+    return f"제외: {relative}\n" + buffer.getvalue()
+
+
 def make_handler(project: Project):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):     # 콘솔 소음 줄이기
@@ -623,6 +640,8 @@ def make_handler(project: Project):
                                                   body.get("rect"))})
                 elif path == "/api/box/reread":
                     self._json({"log": box_reread(project, relative, box_id)})
+                elif path == "/api/drop":
+                    self._json({"log": drop_file(project, relative)})
                 else:
                     self.send_error(404)
             except BrokenPipeError:

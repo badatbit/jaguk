@@ -501,6 +501,23 @@ async function deleteBox() {
     encodeURIComponent(detail.file) + "&id=" + encodeURIComponent(selected)));
 }
 
+async function dropFile() {
+  if (!detail) return;
+  const file = detail.file;
+  if (!confirm(`${file}\n\n이 파일을 제외(drop)합니다 — 모든 상자를 지우고 ` +
+               `이후 추출에서도 무시됩니다. 계속할까요?`)) return;
+  busy("제외 중…");
+  const result = await postOp("/api/drop?path=" + encodeURIComponent(file));
+  selected = null;
+  detail = null;
+  document.getElementById("stage").textContent = "";
+  document.getElementById("curfile").textContent = "파일을 선택하세요";
+  await loadTree();
+  const pane = document.getElementById("props");
+  pane.textContent = "";
+  pane.appendChild(banner(result.ok, (result.ok ? "✅ " : "❌ ") + result.log));
+}
+
 function toolButton(label, onclick, active) {
   const b = el("button", active ? "on" : "", label);
   b.style.cssText = "margin:0 6px 8px 0;background:none;border:1px solid " +
@@ -517,6 +534,7 @@ function renderBoxList(pane) {
     () => { editMode = editMode === "add" ? null : "add";
             renderStage(); renderProps(); },
     editMode === "add"));
+  pane.appendChild(toolButton("🚫 파일 제외", dropFile));
   // 파일 선택 직후 — crop/text 상자 목록. 항목 클릭 = 상자 선택
   pane.appendChild(el("h3", "", `상자 목록 (${detail.rows.length}행)`));
   const t = el("table");
@@ -555,11 +573,8 @@ function renderProps() {
     if (detail.rows.length) {
       renderBoxList(pane);
     } else {
-      const btn = el("button", "", "🔄 박스 지우고 OCR 다시");
-      btn.style.cssText = "margin-bottom:8px;background:none;border:1px solid " +
-                          "var(--line);color:var(--fg);padding:3px 10px;cursor:pointer";
-      btn.onclick = reextract;
-      pane.appendChild(btn);
+      pane.appendChild(toolButton("🔄 박스 지우고 OCR 다시", reextract));
+      pane.appendChild(toolButton("🚫 파일 제외", dropFile));
       pane.appendChild(el("div", "empty", "이 파일에는 행이 없습니다."));
     }
     return;
