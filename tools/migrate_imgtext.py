@@ -13,11 +13,11 @@
   - 좌표는 구 행의 canvas 그대로 둔다 — 네이티브(1024) 좌표인 파일은 이후
     `jaguk recompose` 가 재조합 좌표로 변환한다.
 
-사용: python tools/migrate_imgtext.py <l10n-repo-root>
+사용: python tools/migrate_imgtext.py [l10n-repo-root]
 """
 
+import argparse
 import json
-import sys
 from pathlib import Path
 
 SKIP_FILES = {"parts/route1.tga.png", "parts/route2.tga.png"}
@@ -26,7 +26,10 @@ KEEP_NEW_STYLE = {"parts/parts.tga.png": ("menu", "st60")}
 
 
 def main() -> int:
-    root = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
+    ap = argparse.ArgumentParser(description="구 imgtext 원장 → lettering.json 이식")
+    ap.add_argument("root", nargs="?", default=".",
+                    help="furaiki3-l10n 레포 루트 (기본: 현재 디렉토리)")
+    root = Path(ap.parse_args().root)
     old_path = root / "translation/images/image_text.json"
     new_path = root / "data-image/lettering.json"
     old = json.loads(old_path.read_text(encoding="utf-8"))

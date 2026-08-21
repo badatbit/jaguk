@@ -16,7 +16,7 @@ furaiki3-l10n 의 실측 레이아웃(roadguide_signs.json)을 typelet 행으로
 사용:
     typelet init <프로젝트> 후
     python tools/migrate_roadguide.py --project <프로젝트> \
-        [--l10n f:/dev-furaiki3/furaiki3-l10n] [--row romaji|kanji]
+        --l10n <furaiki3-l10n 레포> [--row romaji|kanji]
     이어서 프로젝트에서:
     typelet erase --method fill --color '#0a579d' --pad 0
     typelet render
@@ -130,7 +130,8 @@ def _portable_path(target: Path, project: Path) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--project", required=True, help="typelet 프로젝트 루트")
-    parser.add_argument("--l10n", default=r"f:\dev-furaiki3\furaiki3-l10n")
+    parser.add_argument("--l10n", required=True,
+                        help="furaiki3-l10n 레포 루트 (roadguide 데이터 소스)")
     parser.add_argument("--row", choices=("romaji", "kanji"), default="romaji")
     args = parser.parse_args()
 

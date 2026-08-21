@@ -4,9 +4,10 @@
 각 파일을 원장 스펙으로 합성(erased 베이스)하고, recompose 스펙이 있으면
 게임 네이티브로 복원한 뒤, 구 파이프라인의 완성본과 픽셀 단위로 비교한다.
 
-사용: python tools/verify_kr_parity.py <l10n-root> <kr-root> [only...]
+사용: python tools/verify_kr_parity.py [l10n-root] [kr-root] [only...]
 """
 
+import argparse
 import io
 import sys
 from collections import defaultdict
@@ -24,9 +25,18 @@ from typelet.config import load_path             # noqa: E402
 
 
 def main() -> int:
-    root = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
-    kr_root = Path(sys.argv[2] if len(sys.argv) > 2 else "../furaiki3-img-kr")
-    only = sys.argv[3:]
+    ap = argparse.ArgumentParser(
+        description="새 렌더 vs 구 산출물(kr 트리) 픽셀 비교")
+    ap.add_argument("root", nargs="?", default=".",
+                    help="jaguk 프로젝트 루트 (기본: 현재 디렉토리)")
+    ap.add_argument("kr_root", nargs="?", default="../furaiki3-img-kr",
+                    help="구 산출물 트리 (기본: 프로젝트 옆 furaiki3-img-kr)")
+    ap.add_argument("only", nargs="*",
+                    help="파일명 부분일치 필터 (여러 개 = OR)")
+    args = ap.parse_args()
+    root = Path(args.root)
+    kr_root = Path(args.kr_root)
+    only = args.only
 
     project = load_path(root / "jaguk.json")
     data = ledgermod.load(project)
