@@ -17,6 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from PIL import Image
+
 from . import ledger as ledgermod
 from .config import Project
 
@@ -54,6 +56,21 @@ def build_tree(project: Project) -> dict:
     # 규칙(set) 경로 기준 그룹핑 — roadguidesign 434판 같은 무리가 트리에서
     # 접히는 그룹으로 보이게 (데이터 모델은 행 그대로, 표시만 묶는다)
     rules_map = data.get("rules", {})
+    # 디스크(originals)에 있는데 행이 없는 파일도 상자 0개로 남긴다 —
+    # 상자 없음은 "할 일 없음"이지 목록에서 사라질 이유가 아니다.
+    # text-only 카탈로그 소속과 ignore 규칙 파일만 뺀다.
+    catalog_files = {f"{(cat.get('dir') or '').strip('/')}/{fname}"
+                     for cat in ledgermod.catalogs(data)
+                     for fname in (cat.get("entries") or {})}
+    if project.original_root.is_dir():
+        for path in sorted(project.original_root.rglob("*.png")):
+            relative = path.relative_to(project.original_root).as_posix()
+            if relative in by_file or relative in catalog_files:
+                continue
+            _, rule = ledgermod.match_rule(rules_map, relative)
+            if ledgermod.rule_mode(rule) == "ignore":
+                continue
+            by_file[relative] = 0
     grouped: dict[str, list] = {}
     loose = []
     for relative, count in sorted(by_file.items()):
@@ -124,8 +141,28 @@ def build_detail(project: Project, relative: str) -> dict:
             except Exception as error:
                 problem = f"오류: {error}"
         row["_problem"] = problem
+    recompose_spec = next((s for s in (data.get("recompose") or [])
+                           if s.get("file") == relative), None)
+    posts = [p for p in (data.get("post") or []) if p.get("file") == relative]
+    # 이미지 크기 — 클라이언트가 로드 전에 자리를 확정할 수 있게 (리플로 방지).
+    # 세 트리 모두 같은 크기다; blank(text-only)는 canvas 가 크기다.
+    size = None
+    for get_root in (IMAGE_ROOTS["original"], IMAGE_ROOTS["erased"]):
+        target = _safe_join(get_root(project), relative)
+        if target and target.exists():
+            with Image.open(target) as im:
+                size = list(im.size)
+            break
+    if size is None and flat:
+        w = int(flat[0].get("canvas_w") or 0)
+        h = int(flat[0].get("canvas_h") or 0)
+        if w and h:
+            size = [w, h]
     return {
         "file": relative,
+        "size": size,
+        "recompose": recompose_spec,
+        "post": posts,
         "rows": flat,                    # 평면 행 (text-only 전개 포함)
         "raw": raw_rows,                 # 일반 행의 구조형 (inline 속성 표시용)
         "catalog": catalog,
@@ -174,7 +211,7 @@ _INJECT_CACHE: dict[str, tuple[tuple, bytes]] = {}
 
 
 def _inject_cache_key(project: Project, relative: str) -> tuple:
-    parts = []
+    parts = [project.supersample]        # 렌더 배율이 바뀌면 캐시도 갈린다
     for path in (project.ledger_path,
                  _safe_join(project.base_root, relative),
                  _safe_join(project.original_root, relative)):
@@ -182,25 +219,169 @@ def _inject_cache_key(project: Project, relative: str) -> tuple:
     return tuple(parts)
 
 
-def render_injected(project: Project, relative: str) -> bytes | None:
+def style_coerce(value):
+    """GUI 입력 문자열 → 원장 값. JSON 이 되면 그 타입(수·배열·객체),
+    아니면 문자열. 빈 문자열은 None (키 제거 신호)."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
+def style_update(project: Project, name: str, updates: dict) -> str:
+    """스타일 저장 (GUI 저장 버튼). 빈 값 키는 지운다."""
+    data = ledgermod.load(project)
+    style = next((s for s in data.get("styles", [])
+                  if s.get("name") == name), None)
+    if style is None:
+        raise ValueError(f"원장에 없는 스타일: {name!r}")
+    changed = []
+    for key, raw in (updates or {}).items():
+        if key == "name":
+            continue                       # 이름 변경은 참조가 다 깨진다
+        value = style_coerce(raw)
+        if value is None:
+            if key in style:
+                del style[key]
+                changed.append(f"-{key}")
+        elif style.get(key) != value:
+            style[key] = value
+            changed.append(f"{key}={value!r}")
+    if not changed:
+        return f"{name}: 변경 없음"
+    ledgermod.save(project, data)
+    _INJECT_CACHE.clear()
+    return f"{name}: " + ", ".join(changed)
+
+
+def render_text_layer(project: Project, relative: str,
+                      style_overrides: dict | None = None) -> bytes | None:
+    """글자 레이어만 — 투명 캔버스에 스펙을 그린 PNG (겹침 보기용).
+
+    베이스를 합성하지 않으므로 원본 위에 얹으면 원문과 한글 잉크가
+    같이 보인다. 베이스 픽셀을 직접 만지는 alpha_clear 행은 표현할 수
+    없어 건너뛴다."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    from . import render as rendermod
+
+    cache_key = _inject_cache_key(project, relative)
+    if not style_overrides:
+        cached = _INJECT_CACHE.get((relative, "text"))
+        if cached and cached[0] == cache_key:
+            return cached[1]
+
+    data = ledgermod.load(project)
+    styles = ledgermod.styles_map(data)
+    for name, edits in (style_overrides or {}).items():
+        if name in styles:
+            patched = dict(styles[name])
+            for key, raw in edits.items():
+                value = style_coerce(raw)
+                if value is None:
+                    patched.pop(key, None)
+                else:
+                    patched[key] = value
+            styles[name] = patched
+    flat = [r for r in ledgermod.flat_rows(data) if r["file"] == relative]
+    terms = ledgermod.load_terms(project, data)
+    if terms:
+        ledgermod.apply_terms(flat, terms)
+    flows = {r["box_id"]: r.get("flow") for r in ledgermod.rows(data)
+             if r.get("flow")}
+    specs = []
+    for row in flat:
+        if row.get("status") == "no_inject":
+            continue
+        if not (row.get("ko_text") or "").strip():
+            continue
+        try:
+            spec = rendermod.resolve(row, styles)
+        except rendermod.SkipRow:
+            continue
+        spec.flow = flows.get(spec.box_id)
+        specs.append(spec)
+    if not specs:
+        return None
+    size = None
+    for root in (project.base_root, project.original_root):
+        path = _safe_join(root, relative)
+        if path and path.exists():
+            with Image.open(path) as im:
+                size = im.size
+            break
+    if size is None:                      # blank 캔버스 (text-only)
+        c = next((s.canvas for s in specs if s.canvas != (0, 0)), None)
+        if c is None:
+            return None
+        size = c
+    ss = project.supersample
+    layer_ss = Image.new("RGBA", (size[0] * ss, size[1] * ss), (0, 0, 0, 0))
+    fonts = rendermod.FontCache(project)
+    from collections import defaultdict
+    runs = defaultdict(list)
+    for spec in specs:
+        if spec.effect == "alpha_clear":
+            continue
+        if spec.run_id:
+            runs[spec.run_id].append(spec)
+        else:
+            rendermod.render_single(layer_ss, rendermod.scale_spec(spec, ss),
+                                    fonts)
+    for members in runs.values():
+        rendermod.render_run(
+            layer_ss, [rendermod.scale_spec(m, ss) for m in members], fonts)
+    layer = layer_ss if ss == 1 else \
+        layer_ss.resize(size, Image.Resampling.LANCZOS)
+    buffer = BytesIO()
+    layer.save(buffer, "PNG")
+    body = buffer.getvalue()
+    if not style_overrides:
+        _INJECT_CACHE[(relative, "text")] = (cache_key, body)
+    return body
+
+
+def render_injected(project: Project, relative: str,
+                    style_overrides: dict | None = None) -> bytes | None:
     """원장 **현재 상태**로 즉석 합성한 injected 미리보기 PNG.
 
     status 와 무관하게 ko(용어표 해석 포함)가 있고 스타일이 갖춰진 행을
     전부 렌더한다 — inject 를 돌리기 전에도 결과를 볼 수 있다.
     합성 불가(스펙 없음·베이스 없음 등)면 None — 호출자가 디스크 산출물로
     폴백한다.
+
+    style_overrides = {스타일명: {키: GUI 입력 문자열}} — 원장에 쓰지 않고
+    이번 렌더에만 얹는 라이브 미리보기. 캐시를 거치지 않는다.
     """
     from io import BytesIO
 
     from . import render as rendermod
 
     cache_key = _inject_cache_key(project, relative)
-    cached = _INJECT_CACHE.get(relative)
-    if cached and cached[0] == cache_key:
-        return cached[1]
+    if not style_overrides:
+        cached = _INJECT_CACHE.get(relative)
+        if cached and cached[0] == cache_key:
+            return cached[1]
 
     data = ledgermod.load(project)
     styles = ledgermod.styles_map(data)
+    for name, edits in (style_overrides or {}).items():
+        if name not in styles:
+            continue
+        patched = dict(styles[name])
+        for key, raw in edits.items():
+            value = style_coerce(raw)
+            if value is None:
+                patched.pop(key, None)
+            else:
+                patched[key] = value
+        styles[name] = patched
     flat = [r for r in ledgermod.flat_rows(data) if r["file"] == relative]
     terms = ledgermod.load_terms(project, data)
     if terms:
@@ -220,7 +401,7 @@ def render_injected(project: Project, relative: str) -> bytes | None:
         spec.flow = flows.get(spec.box_id)
         specs.append(spec)
     def store(body: bytes | None) -> bytes | None:
-        if body is not None:
+        if body is not None and not style_overrides:   # 미리보기는 캐시 안 함
             _INJECT_CACHE[relative] = (cache_key, body)
         return body
 
@@ -366,9 +547,6 @@ def box_add(project: Project, relative: str, rect: list) -> str:
     flat = [r for r in ledgermod.flat_rows(data) if r["file"] == relative]
     if any(r.get("base") == "blank" for r in flat):
         raise ValueError("text-only 파일은 entries 로 관리합니다 — 행 추가 불가")
-    path = _safe_join(project.original_root, relative)
-    with Image.open(path) as image:
-        canvas = list(image.size)
     rows = ledgermod.rows(data)
     box_id = _alloc_id({r.get("box_id") for r in rows},
                        ocrmod._id_prefix(relative))
@@ -378,7 +556,7 @@ def box_add(project: Project, relative: str, rect: list) -> str:
         "box_id": box_id, "file": relative, "element_id": None,
         "run_id": None, "jp": jp, "ko": "", "ocr_id": None,
         "crop": None, "text": list(rect), "source": list(rect),
-        "canvas": canvas, "pad": None, "style": rule.get("style", ""),
+        "canvas": None, "pad": None, "style": rule.get("style", ""),
         "opacity": "FF", "status": "todo", "notes": "manual",
     })
     ledgermod.save(project, data)
@@ -400,12 +578,7 @@ def box_update(project: Project, relative: str, box_id: str,
     data = ledgermod.load(project)
     for row in ledgermod.rows(data):
         if row.get("box_id") == box_id and row.get("file") == relative:
-            if key == "crop":
-                crop = row.get("crop") or {"id": None, "src": "manual"}
-                crop["rect"] = rect
-                row["crop"] = crop
-            else:
-                row[key] = rect
+            row[key] = rect          # crop 도 text/source 와 같은 평면 박스
             ledgermod.save(project, data)
             _INJECT_CACHE.pop(relative, None)
             return f"{box_id}.{key} = {rect}"
@@ -419,6 +592,35 @@ def box_update(project: Project, relative: str, box_id: str,
                 ledgermod.save(project, data)
                 _INJECT_CACHE.pop(relative, None)
                 return f"{box_id}.text = {rect} (entry override)"
+    raise ValueError(f"행을 찾지 못함: {box_id}")
+
+
+def box_set_style(project: Project, relative: str, box_id: str,
+                  style_name: str) -> str:
+    """행의 스타일 지정 변경 (GUI 드롭다운). 빈 문자열 = 지정 해제.
+
+    text-only 항목이면 entry 에 override 로 얹힌다 (묶음 기본은 그대로)."""
+    style_name = (style_name or "").strip()
+    data = ledgermod.load(project)
+    if style_name and style_name not in {s["name"] for s in data.get("styles", [])}:
+        raise ValueError(f"원장에 없는 스타일: {style_name!r}")
+    for row in ledgermod.rows(data):
+        if row.get("box_id") == box_id and row.get("file") == relative:
+            row["style"] = style_name
+            ledgermod.save(project, data)
+            _INJECT_CACHE.pop(relative, None)
+            return f"{box_id}.style = {style_name or '(없음)'}"
+    for cat in ledgermod.catalogs(data):
+        for fname, entry in (cat.get("entries") or {}).items():
+            if f"{cat['name']}:{fname.split('.')[0]}" == box_id:
+                if style_name and style_name != cat.get("style"):
+                    entry["style"] = style_name
+                else:
+                    entry.pop("style", None)   # 묶음 기본과 같으면 override 제거
+                ledgermod.save(project, data)
+                _INJECT_CACHE.pop(relative, None)
+                return f"{box_id}.style = {style_name or cat.get('style', '')}" \
+                       + ("" if style_name != cat.get("style") else " (묶음 기본)")
     raise ValueError(f"행을 찾지 못함: {box_id}")
 
 
@@ -500,8 +702,7 @@ def box_split(project: Project, relative: str, box_id: str, at: int) -> str:
 
     text_l, text_r = halves(row.get("text"))
     source_l, source_r = halves(row.get("source"))
-    crop_rect = (row.get("crop") or {}).get("rect")
-    crop_l, crop_r = halves(crop_rect)
+    crop_l, crop_r = halves(ledgermod.crop_rect(row) or None)
     if not (text_l or source_l):
         raise ValueError("나눌 상자(text/source)가 없습니다")
 
@@ -517,8 +718,7 @@ def box_split(project: Project, relative: str, box_id: str, at: int) -> str:
         part["box_id"] = new_id
         part["text"] = text
         part["source"] = source
-        part["crop"] = ({"id": None, "src": "manual", "rect": crop}
-                        if crop else None)
+        part["crop"] = crop or None
         part["jp"] = _read_region(project, relative, source or text) or row.get("jp", "")
         part["ko"] = ""
         part["notes"] = "manual split"
@@ -547,7 +747,25 @@ def drop_file(project: Project, relative: str) -> str:
     return f"제외: {relative}\n" + buffer.getvalue()
 
 
-def make_handler(project: Project):
+def make_handler(project: Project, config_path: Path | None = None):
+    state = {"project": project,
+             "mtime": config_path.stat().st_mtime_ns if config_path else None}
+
+    def current() -> Project:
+        # 설정 파일이 바뀌면 재로드 — 서버 재시작 없이 폰트·경로 변경 반영.
+        # 원장·이미지는 원래 요청마다 읽으므로 이걸로 GUI 전체가 동적이 된다.
+        if config_path is not None:
+            try:
+                mtime = config_path.stat().st_mtime_ns
+            except OSError:
+                return state["project"]
+            if mtime != state["mtime"]:
+                from .config import load_path
+                state["project"] = load_path(config_path)
+                state["mtime"] = mtime
+                _INJECT_CACHE.clear()
+        return state["project"]
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):     # 콘솔 소음 줄이기
             pass
@@ -564,6 +782,7 @@ def make_handler(project: Project):
         def do_GET(self):
             url = urlparse(self.path)
             path = unquote(url.path)
+            project = current()
             try:
                 if path == "/":
                     body = PAGE.read_bytes()
@@ -582,8 +801,24 @@ def make_handler(project: Project):
                     _, _, kind, relative = path.split("/", 3)
                     body = None
                     if kind == "injected":
-                        # 원장 현재 상태로 즉석 렌더 — 실패 시 디스크 폴백
-                        body = render_injected(project, relative)
+                        # 항상 원장 현재 상태로 즉석 렌더 — 디스크 산출물은
+                        # 안 본다 (jaguk inject 결과가 낡았어도 GUI 는 지금
+                        # 데이터를 보여준다). 실패는 404 로 정직하게.
+                        # ?styles={스타일명:{키:값}} = 저장 전 라이브 미리보기
+                        # ?layer=text = 글자 레이어만 (겹침 보기)
+                        query = parse_qs(url.query)
+                        overrides = None
+                        raw = query.get("styles", [""])[0]
+                        if raw:
+                            overrides = json.loads(raw)
+                        if query.get("layer", [""])[0] == "text":
+                            body = render_text_layer(project, relative,
+                                                     overrides)
+                        else:
+                            body = render_injected(project, relative, overrides)
+                        if body is None:
+                            self.send_error(404)
+                            return
                     elif kind == "erased":
                         root = IMAGE_ROOTS["erased"](project)
                         disk = _safe_join(root, relative)
@@ -605,11 +840,13 @@ def make_handler(project: Project):
                     self.wfile.write(body)
                 else:
                     self.send_error(404)
-            except BrokenPipeError:
-                pass
+            except ConnectionError:
+                pass    # 새로고침 등으로 브라우저가 끊음 — 정상 (10053/10054)
             except Exception as error:          # 페이지가 오류를 볼 수 있게
-                self._json({"error": str(error)}, status=500)
-
+                try:
+                    self._json({"error": str(error)}, status=500)
+                except ConnectionError:
+                    pass
         def _body(self) -> dict:
             length = int(self.headers.get("Content-Length") or 0)
             if not length:
@@ -621,6 +858,7 @@ def make_handler(project: Project):
             query = parse_qs(url.query)
             relative = query.get("path", [""])[0]
             box_id = query.get("id", [""])[0]
+            project = current()
             try:
                 path = unquote(url.path)
                 if path == "/api/reextract":
@@ -640,20 +878,34 @@ def make_handler(project: Project):
                                                   body.get("rect"))})
                 elif path == "/api/box/reread":
                     self._json({"log": box_reread(project, relative, box_id)})
+                elif path == "/api/box/style":
+                    self._json({"log": box_set_style(
+                        project, relative, box_id,
+                        self._body().get("style", ""))})
                 elif path == "/api/drop":
                     self._json({"log": drop_file(project, relative)})
+                elif path == "/api/style/update":
+                    body = self._body()
+                    self._json({"log": style_update(
+                        project, body.get("name", ""),
+                        body.get("updates") or {})})
                 else:
                     self.send_error(404)
-            except BrokenPipeError:
-                pass
+            except ConnectionError:
+                pass    # 브라우저가 끊음 — 정상
             except Exception as error:
-                self._json({"error": str(error)}, status=500)
+                try:
+                    self._json({"error": str(error)}, status=500)
+                except ConnectionError:
+                    pass
 
     return Handler
 
 
-def run(project: Project, port: int = 52485, open_browser: bool = True) -> int:
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(project))
+def run(project: Project, port: int = 52485, open_browser: bool = True,
+        config_path: Path | None = None) -> int:
+    server = ThreadingHTTPServer(("127.0.0.1", port),
+                                 make_handler(project, config_path))
     url = f"http://127.0.0.1:{port}/"
     print(f"jaguk gui: {url}  (프로젝트 {project.root}, Ctrl+C 로 종료)")
     if open_browser:

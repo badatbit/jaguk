@@ -493,7 +493,7 @@ def _normalize_slots(targets: list[dict], rule: dict) -> tuple[int, int]:
     def effective(row, key):
         value = row.get(key)
         if key == "crop":
-            value = (row.get("crop") or {}).get("rect")
+            value = ledgermod.crop_rect(row) or None
         if value:
             return value
         index = row.get("slot")
@@ -612,7 +612,7 @@ def seed_rows_mode(data: dict, entry: dict, rule: dict) -> tuple[int, int]:
     rows = ledgermod.rows(data)
     existing_ids = {r.get("box_id") for r in rows}
     existing_crops = {
-        (r.get("file"), tuple((r.get("crop") or {}).get("rect") or ()))
+        (r.get("file"), tuple(ledgermod.crop_rect(r)))
         for r in rows if r.get("crop")
     }
     relative = entry["file"]
@@ -644,10 +644,10 @@ def seed_rows_mode(data: dict, entry: dict, rule: dict) -> tuple[int, int]:
             "jp": ref["text"],
             "ko": "",
             "ocr_id": None,
-            "crop": {"id": None, "src": "OCR", "rect": rect},
+            "crop": rect,
             "text": [line["x"], line["y"], line["w"], line["h"]],
             "source": [ref["x"], ref["y"], ref["w"], ref["h"]],
-            "canvas": [width, height],
+            "canvas": None,
             "pad": None,
             "style": rule.get("style", ""),
             "opacity": "FF",
@@ -856,7 +856,9 @@ def cmd_recompose(args) -> int:
 def cmd_gui(args) -> int:
     from . import gui
     project = load_project(args.config)
-    return gui.run(project, port=args.port, open_browser=not args.no_browser)
+    config_path = Path(args.config or CONFIG_NAME).resolve()
+    return gui.run(project, port=args.port, open_browser=not args.no_browser,
+                   config_path=config_path)
 
 
 def cmd_status(args) -> int:

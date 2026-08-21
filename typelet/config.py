@@ -35,6 +35,9 @@
                     모델로 다시 한다 (상자는 유지) — 오독·환각이 크게 준다
     fonts           {"패밀리/weight": "글꼴파일"} — 파일은 font_root 기준
                     상대 또는 절대 경로
+    supersample     렌더 슈퍼샘플 배율 (기본 4) — 글자 레이어를 이 배율로
+                    그려 LANCZOS 축소한다. 1 = 끔(직접 1x), 클수록 AA 가
+                    매끈하지만 메모리·시간이 배율²로 는다
 """
 
 from __future__ import annotations
@@ -61,6 +64,7 @@ DEFAULTS = {
     "ocr_dict_min": 0.7,
     "ocr_recognizer": "",
     "fonts": {},
+    "supersample": 4,
 }
 
 
@@ -82,6 +86,7 @@ class Project:
     ocr_dict_min: float
     ocr_recognizer: str
     fonts: dict[str, str]
+    supersample: int = 4
 
 
 def find_config(start: Path | None = None) -> Path | None:
@@ -148,6 +153,7 @@ def load_path(config_path: Path) -> Project:
         ocr_dict_min=float(raw["ocr_dict_min"]),
         ocr_recognizer=raw["ocr_recognizer"],
         fonts=dict(raw["fonts"]),
+        supersample=max(1, int(raw["supersample"])),
     )
 
 

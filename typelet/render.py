@@ -55,7 +55,7 @@ ITALIC_SLANT = 0.2
 # 그림자를 전부 4x 로 스케일해 그리므로 배치는 1x 와 동일하고(¼px 정밀),
 # 축소 후 AA 만 매끈해진다. 베이스에 직접 쓰는 alpha_clear·rgb_ink 는 글자
 # 마스크만 4x 로 만들어 축소해 쓴다.
-SS = 4
+# 슈퍼샘플 배율은 설정 supersample (기본 4) — project 에서 읽는다.
 
 SHADOW_RE = re.compile(
     r"drop_shadow\(dx=(-?\d+),dy=(-?\d+),blur=([0-9.]+)"
@@ -104,7 +104,6 @@ class RowSpec:
     ss: int = 1                             # 이 스펙이 몇 배로 스케일됐나 (슈퍼샘플)
     base: str = ""                          # "blank" = base 파일 없이 투명 캔버스
     overflow: str = ""                      # "squeeze" = 넘치면 가로만 압축
-    fit: str = ""                           # "original-body" = 원본 실측 재현
     squeeze_min: float = 0.0                # squeeze 하한 — 그 이상은 넘치게 둔다
 
 
@@ -169,14 +168,10 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
     style = styles[style_name]
 
     effect = (style.get("effect") or "").strip()
-    fit_mode = (row.get("fit") or "").strip()
 
-    # fit 은 원본 실측이 자리를 정하므로 text 상자·canvas·크기가 없어도 된다
     box = parse_box(row, "text_", box_id)
     if box is None:
-        if not fit_mode:
-            raise SkipRow(f"{box_id}: text 상자가 없습니다")
-        box = (0, 0, 0, 0)
+        raise SkipRow(f"{box_id}: text 상자가 없습니다")
     crop = parse_box(row, "crop_", box_id)
 
     # 스타일 offset — 상자 좌표(원문 유래)는 두고 스타일이 그리기 원점을
@@ -191,7 +186,7 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
     family = (style.get("font_family_ko") or "").strip()
     weight_s = str(style.get("font_weight") or "").strip()
     size_s = str(style.get("font_size_px") or "").strip()
-    if not family or not weight_s or (not size_s and not fit_mode):
+    if not family or not weight_s or not size_s:
         raise SkipRow(f"{box_id}: 스타일 {style_name} 의 글꼴 정의가 불완전합니다")
 
     opacity_s = (row.get("opacity") or "").strip() or "FF"
@@ -217,10 +212,10 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
         # 두께 0 이면 outline 은 안 쓰인다 — OCR 잔재 색값이 남아 있어도 무시.
         outline = (0, 0, 0, 0)
 
+    # canvas 는 blank 베이스(text-only) 전용 — 만들 투명 캔버스의 크기.
+    # 파일 베이스 행은 좌표계가 곧 베이스 이미지라 따로 선언하지 않는다.
     canvas_w = int(row.get("canvas_w", "").strip() or 0)
     canvas_h = int(row.get("canvas_h", "").strip() or 0)
-    if (not canvas_w or not canvas_h) and not fit_mode:
-        raise ValueError(f"{box_id}: canvas 크기가 없습니다")
 
     font_style = (style.get("font_style") or "").strip()
     if font_style not in ("", "regular", "italic"):
@@ -245,16 +240,6 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
     if not 0 <= squeeze_min < 1:
         raise ValueError(f"{box_id}: squeeze_min 은 0~1 미만이다: {squeeze_min}")
 
-    fit = (row.get("fit") or "").strip()
-    if fit not in ("", "original-body"):
-        raise ValueError(f"{box_id}: 지원하지 않는 fit {fit!r}")
-    if fit and (vertical or distribute or overflow
-                or (row.get("run_id") or "").strip()
-                or effect not in PLAIN_EFFECTS):
-        raise ValueError(
-            f"{box_id}: fit 은 단독 행 + 효과 없음일 때만 지원합니다"
-        )
-
     return RowSpec(
         box_id=box_id,
         file=row["file"],
@@ -266,19 +251,17 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
         align=align,
         family=family,
         weight=int(weight_s),
-        size=int(size_s or 0),              # fit 이면 실측이 크기를 정한다
-
+        size=int(size_s),
         fill=fill,
         outline=outline,
         outline_w=outline_w,
         effect=effect,
-        canvas=(canvas_w, canvas_h),        # fit 이면 (0,0) 허용 — 원본 크기
+        canvas=(canvas_w, canvas_h),
         slant=slant,
         vertical=vertical,
         distribute=distribute,
         base=(row.get("base") or "").strip(),
         overflow=overflow,
-        fit=fit,
         squeeze_min=squeeze_min,
     )
 
@@ -475,12 +458,15 @@ def draw_rotated(
 
 
 def text_mask_ss(size, position, spec: RowSpec, fonts) -> Image.Image:
-    """1x 캔버스용 글자 마스크를 SS 배로 그려 축소 — 사선 AA 가 매끈해진다."""
-    font4 = fonts.get_key(spec.family, spec.weight, spec.size * SS)
-    spec4 = scale_spec(spec, SS)
+    """1x 캔버스용 글자 마스크를 슈퍼샘플 배로 그려 축소 — 사선 AA 가 매끈해진다."""
+    ss = fonts.project.supersample
+    font_ss = fonts.get_key(spec.family, spec.weight, spec.size * ss)
+    spec_ss = scale_spec(spec, ss)
     x, y = snap(position)
-    big = (size[0] * SS, size[1] * SS)
-    mask = text_mask(big, (x * SS, y * SS), spec4, font4)
+    big = (size[0] * ss, size[1] * ss)
+    mask = text_mask(big, (x * ss, y * ss), spec_ss, font_ss)
+    if ss == 1:
+        return mask
     return mask.resize(size, Image.Resampling.LANCZOS)
 
 
@@ -563,69 +549,6 @@ def draw_alpha_clear(
         # 마스크 없이 사각형째 덮는다. 꼬리 알파를 마스크로 쓰면 α=0 바탕과
         # 섞여 결과 알파가 α²/255 로 꺾인다.
         image.paste(tail_image, (tail_x, cy))
-
-
-def draw_fit_original(
-    image: Image.Image,
-    original: Image.Image,
-    spec: RowSpec,
-    fonts,
-) -> None:
-    """원본 실측 재현 — touringspotname 규칙 이식 (장마다 규격이 달라
-    원장에 크기를 굽는 대신 원본에서 매번 잰다).
-
-    실측: 몸통 = 알파≥40 이고 밝기((r+g+b)//3) > 150 인 잉크의 bbox,
-    테두리 폭 = 몸통과 전체 잉크의 여백 최댓값 (1~3 클램프).
-    배치: 몸통 높이에 들어가는 최대 글꼴 크기(6~64 탐색), 가로는 잉크 중앙,
-    세로는 원본 몸통 상단. 색은 스타일의 fill/outline.
-    """
-    import numpy as np
-
-    arr = np.asarray(original)
-    alpha = arr[:, :, 3] >= 40
-    if not alpha.any():
-        raise ValueError(f"{spec.box_id}: 원본 글자 영역을 찾을 수 없습니다")
-    body_mask = alpha & ((arr[:, :, :3].astype(int).sum(axis=2) // 3) > 150)
-    if not body_mask.any():
-        raise ValueError(f"{spec.box_id}: 원본 글자 몸통을 찾을 수 없습니다")
-
-    def bbox(mask):
-        ys, xs = np.where(mask)
-        return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
-
-    visible = bbox(alpha)
-    body = bbox(body_mask)
-    width = original.width
-    body_height = body[3] - body[1] + 1
-    outline = max(1, min(3, round(max(
-        body[0] - visible[0], body[1] - visible[1],
-        visible[2] - body[2], visible[3] - body[3]))))
-
-    # 몸통 높이에 맞는 최대 크기 탐색 — 원본별 규격 재현이라 여기선 fit 이 맞다
-    best = None
-    for size in range(6, 65):
-        font = fonts.get_key(spec.family, spec.weight, size)
-        box = _PROBE.textbbox((0, 0), spec.text, font=font)
-        if (box[3] - box[1] <= body_height
-                and box[2] - box[0] <= width - 2 * outline - 2):
-            best = font, box
-        elif best and box[3] - box[1] > body_height:
-            break
-    if best is None:
-        raise ValueError(f"{spec.box_id}: 텍스트를 이미지 폭에 맞출 수 없습니다: "
-                         f"{spec.text!r}")
-    font, box = best
-    ink_width = box[2] - box[0]
-    x = round((width - ink_width) / 2 - box[0])
-    y = body[1] - box[1]
-
-    # 스타일에 outline_rgb 가 없으면 검정 — touringname 원 규격
-    outline_color = spec.outline if spec.outline[3] else (0, 0, 0, 255)
-    layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    ImageDraw.Draw(layer).text(
-        (x, y), spec.text, font=font, fill=spec.fill,
-        stroke_width=outline, stroke_fill=outline_color)
-    image.alpha_composite(layer)
 
 
 def mean_alpha(image: Image.Image, box: tuple[int, int, int, int]) -> float:
@@ -1012,10 +935,10 @@ def compose_file(
     if blank and any(spec.effect == "alpha_clear" for spec in specs):
         raise ValueError(f"{relative}: blank 베이스에는 alpha_clear 를 쓸 수 없습니다")
 
-    # 원본이 필요한 경우: alpha_clear · fit(실측) · canvas 미지정 blank(원본 크기)
+    # 원본이 필요한 경우: alpha_clear · canvas 미지정 blank(원본 크기)
     original = None
     needs_original = (
-        any(spec.effect == "alpha_clear" or spec.fit for spec in specs)
+        any(spec.effect == "alpha_clear" for spec in specs)
         or (blank and specs[0].canvas == (0, 0))
     )
     if needs_original:
@@ -1047,15 +970,11 @@ def compose_file(
             f"{relative}: 원본 크기 {original.size} != 베이스 크기 {source.size}"
         )
 
-    for spec in specs:
-        if spec.canvas != (0, 0) and spec.canvas != source.size:
-            raise RuntimeError(
-                f"{spec.box_id}: canvas {spec.canvas} != 베이스 {source.size}"
-            )
-
-    # 글자 레이어는 SS 배로 그려 한 번에 축소한다 (베이스 직접 기록 경로 제외)
-    text_layer4 = Image.new(
-        "RGBA", (source.width * SS, source.height * SS), (0, 0, 0, 0))
+    # 글자 레이어는 supersample 배로 그려 한 번에 축소한다 (베이스 직접
+    # 기록 경로 제외). 배율은 설정 supersample — 1 이면 축소 없이 직접.
+    ss = project.supersample
+    text_layer_ss = Image.new(
+        "RGBA", (source.width * ss, source.height * ss), (0, 0, 0, 0))
     fonts = FontCache(project)
 
     runs: dict[str, list[RowSpec]] = defaultdict(list)
@@ -1069,20 +988,18 @@ def compose_file(
     for spec in singles:
         if spec.effect == "alpha_clear":
             draw_alpha_clear(source, original, spec, fonts)
-        elif spec.fit == "original-body":
-            # 실측 재현은 1x 직접 그리기 — 원 규격(touringname)과 픽셀 일치
-            draw_fit_original(source, original, spec, fonts)
         elif spec.fill[3] < 255 and mean_alpha(source, spec.box) > 128:
             # opacity 가 걸린 행 + 불투명 베이스 = 알파 먹은 사본에 주입.
             # 베이스가 투명한 스프라이트는 아래 일반 경로에서 잉크에 알파를
             # 실어 저장한다.
             draw_rgb_ink(source, spec, fonts)
         else:
-            render_single(text_layer4, scale_spec(spec, SS), fonts)
+            render_single(text_layer_ss, scale_spec(spec, ss), fonts)
     for members in runs.values():
-        render_run(text_layer4, [scale_spec(m, SS) for m in members], fonts)
+        render_run(text_layer_ss, [scale_spec(m, ss) for m in members], fonts)
 
-    text_layer = text_layer4.resize(source.size, Image.Resampling.LANCZOS)
+    text_layer = text_layer_ss if ss == 1 else \
+        text_layer_ss.resize(source.size, Image.Resampling.LANCZOS)
     output = Image.alpha_composite(source, text_layer)
     validate_untouched(source, text_layer, output)
     if posts:
@@ -1097,9 +1014,16 @@ def render_file(
     base_root: Path | None = None,
     output_root: Path | None = None,
     posts: list[dict] | None = None,
+    restore_spec: dict | None = None,
 ) -> Path:
     output, source_path, source_bytes = compose_file(
         project, relative, specs, base_root, posts)
+    if restore_spec and list(output.size) == list(restore_spec["to"]):
+        # 작업은 재조합 좌표계에서, 산출물은 게임 네이티브로 — 디스크에
+        # 쓰는 순간이 유일한 복원 지점이다 (구 imgtext 의 주입 직전 복원을
+        # 이리로 옮김)
+        from . import recompose as recompmod
+        output = recompmod.restore(output, restore_spec)
     output_path = safe_path(output_root or project.output_root, relative)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output.save(output_path)
@@ -1178,10 +1102,16 @@ def run(project: Project, statuses: set[str] | None = None, only: str = "",
         posts_by_file: dict[str, list[dict]] = defaultdict(list)
         for post in data.get("post", []):
             posts_by_file[post["file"]].append(post)
+        # 재조합 파일은 저장 때 게임 네이티브로 복원한다 (미리보기 제외)
+        restore_by_file = {} if on_original else \
+            {s["file"]: s for s in (data.get("recompose") or [])}
         for relative, file_specs in sorted(grouped.items()):
+            restore_spec = restore_by_file.get(relative)
             output_path = render_file(project, relative, file_specs, base_root,
-                                      output_root, posts_by_file.get(relative))
-            print(f"saved {output_path} ({len(file_specs)}개 텍스트)")
+                                      output_root, posts_by_file.get(relative),
+                                      restore_spec)
+            tag = " · 네이티브 복원" if restore_spec else ""
+            print(f"saved {output_path} ({len(file_specs)}개 텍스트{tag})")
 
     if skipped:
         print(f"\n건너뜀 {len(skipped)}행 (데이터 미정리):")

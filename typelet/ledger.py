@@ -11,11 +11,13 @@
     run_id      같은 값끼리 한 상자를 이어 그리는 한 줄 (null = 단독)
     jp / ko     원문 / 번역문. **ko 의 앞뒤 공백은 내용이다**
     ocr_id      원문 글자 범위 상자의 id
-    crop        {"id", "src", "rect":[x,y,w,h]} | null — 스프라이트 조각 범위
+    crop        [x,y,w,h] | [x,y](스타일 crop_size 파생) | null — 지울 영역.
+                text/source 와 같은 평면 박스 (구형 {"id","src","rect"} 도 읽음)
     text        [x,y,w,h] — 번역문을 앉힐 상자. **좌상단 기준**, 상자 안 정렬은
                 스타일의 text_align 이 정한다
     source      [x,y,w,h] — 원문 글자가 있던 범위 (ocr-box)
-    canvas      [w,h] — 캔버스 크기 (검증용)
+    canvas      (blank 베이스 전용) 만들 투명 캔버스 [w,h] — 일반 행은
+                베이스 이미지가 곧 좌표계라 쓰지 않는다
     pad         {"l","t","r","b"} 중 있는 것만
     style       styles 의 name
     opacity     두 자리 hex — 그 자리가 알파를 얼마나 먹었나 (기본 "FF")
@@ -38,13 +40,9 @@ text_only 로 묶는다 — 공통 속성을 한 번만 선언하고 항목은 �
               "file" 이면 일반 행처럼 base 트리를 읽는다,
      "style": 공통 스타일 이름, "text": 공통 text 상자,
      "overflow": "squeeze" — 넘치면 가로만 압축 (크기·높이 불변),
-     "fit":   "original-body" — 크기·테두리·자리를 원장에 굽지 않고 **원본을
-              실측해 재현**한다 (touringspotname 규칙: 글자 몸통 높이에 맞는
-              최대 크기, 테두리 폭은 잉크 여백에서, 가로 중앙·세로는 원본
-              몸통 상단). 원본 이미지가 필요하다. text 상자·canvas 생략 가능,
      "entries": {"slsn00001.tga.png": {"jp","ko","status", …개별 override}}}
 
-entries 의 개별 항목은 canvas·text·style·opacity·overflow·fit 을 override 할
+entries 의 개별 항목은 canvas·text·style·opacity·overflow 를 override 할
 수 있다.
 
 ## terms (선택, 최상위 키) — 전역 번역 용어표
@@ -91,7 +89,7 @@ from .config import Project
 
 FLAT_KEYS = (
     "box_id", "file", "element_id", "run_id", "jp_text", "ko_text",
-    "ocr_id", "crop_id", "crop_src", "crop_x", "crop_y", "crop_w", "crop_h",
+    "ocr_id", "crop_x", "crop_y", "crop_w", "crop_h",
     "text_x", "text_y", "text_w", "text_h", "canvas_w", "canvas_h",
     "source_x", "source_y", "source_box_w", "source_box_h",
     "pad_l", "pad_t", "pad_r", "pad_b", "style", "opacity", "status", "notes",
@@ -142,7 +140,7 @@ def expand_catalogs(data: dict) -> list[dict]:
             stem = fname.split(".")[0]
             canvas = e.get("canvas", cat.get("canvas"))
             if canvas == "original":
-                canvas = None       # 렌더러가 원본 크기를 쓴다 (fit 류)
+                canvas = None       # 렌더러가 원본 크기를 쓴다
             out.append({
                 "box_id": f"{name}:{stem}",
                 "file": f"{directory}/{fname}" if directory else fname,
@@ -162,7 +160,6 @@ def expand_catalogs(data: dict) -> list[dict]:
                 "notes": e.get("notes"),
                 "base": base,
                 "overflow": e.get("overflow", cat.get("overflow", "")),
-                "fit": e.get("fit", cat.get("fit", "")),
                 "catalog": name,
             })
     return out
@@ -172,10 +169,17 @@ def _s(v) -> str:
     return "" if v is None else str(v)
 
 
+def crop_rect(r: dict) -> list:
+    """행의 crop — 평면 [x,y,w,h] 또는 [x,y]. 구형 {id,src,rect} 도 읽는다."""
+    crop = r.get("crop")
+    if isinstance(crop, dict):
+        crop = crop.get("rect")
+    return list(crop or [])
+
+
 def flatten_row(r: dict) -> dict:
     """구조형 행 → 평면 문자열 dict."""
-    crop = r.get("crop") or {}
-    rect = (list(crop.get("rect") or []) + [None] * 4)[:4]   # [x,y]만도 허용
+    rect = (crop_rect(r) + [None] * 4)[:4]   # [x,y]만도 허용
     text = r.get("text") or [None] * 4
     src = r.get("source") or [None] * 4
     canvas = r.get("canvas") or [None, None]
@@ -188,8 +192,6 @@ def flatten_row(r: dict) -> dict:
         "jp_text": _s(r.get("jp")),
         "ko_text": _s(r.get("ko")),
         "ocr_id": _s(r.get("ocr_id")),
-        "crop_id": _s(crop.get("id")),
-        "crop_src": _s(crop.get("src")),
         "crop_x": _s(rect[0]), "crop_y": _s(rect[1]),
         "crop_w": _s(rect[2]), "crop_h": _s(rect[3]),
         "text_x": _s(text[0]), "text_y": _s(text[1]),
@@ -205,7 +207,6 @@ def flatten_row(r: dict) -> dict:
         "notes": _s(r.get("notes")),
         "base": _s(r.get("base")),
         "overflow": _s(r.get("overflow")),
-        "fit": _s(r.get("fit")),
         "catalog": _s(r.get("catalog")),
         "slot": _s(r.get("slot")),
     }
@@ -239,7 +240,6 @@ def flat_rows(data: dict) -> list[dict]:
                     x, y, w, h = spec["crop"]
                     flat["crop_x"], flat["crop_y"] = str(x), str(y)
                     flat["crop_w"], flat["crop_h"] = str(w), str(h)
-                    flat["crop_src"] = "slot"
                 if not r.get("source") and spec.get("source"):
                     x, y, w, h = spec["source"]
                     flat["source_x"], flat["source_y"] = str(x), str(y)
@@ -249,10 +249,10 @@ def flat_rows(data: dict) -> list[dict]:
         # ② text 상자 = crop + pad (행 pad 우선, 없으면 스타일 pad)
         style = styles_by_name.get((r.get("style") or "").strip())
         if style:
-            crop_rect = (r.get("crop") or {}).get("rect")
-            if crop_rect and len(crop_rect) == 2 and style.get("crop_size"):
+            rect2 = crop_rect(r)
+            if len(rect2) == 2 and style.get("crop_size"):
                 w, h = style["crop_size"]
-                flat["crop_x"], flat["crop_y"] = str(crop_rect[0]), str(crop_rect[1])
+                flat["crop_x"], flat["crop_y"] = str(rect2[0]), str(rect2[1])
                 flat["crop_w"], flat["crop_h"] = str(w), str(h)
             pad = r.get("pad") or style.get("pad")
             if pad and flat["text_x"] == "" and flat["crop_x"] != "":

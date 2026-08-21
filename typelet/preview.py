@@ -173,13 +173,6 @@ def run(project: Project, only: str = "", scale: int = 2) -> int:
             if None not in c:
                 C = RS(c)
                 d.rectangle(C, outline=MAGENTA, width=1)
-                cl = r.get("crop_id") or ""
-                if cl:
-                    labels.append({
-                        "parts": [(cl, MAGENTA)],
-                        "w": 6 * len(cl) + 5, "h": 11,
-                        "cands": cands_around(*C, 6 * len(cl) + 5, 11),
-                        "ref": (C[0], C[1]), "pri": 1})
             # source 도 같이 그린다 — 원문이 어디 있었는지 보여야 배치를 판단한다
             o = [num(r["source_" + k]) for k in ("x", "y", "box_w", "box_h")]
             if None not in o:

@@ -18,8 +18,9 @@
 
 jaguk recompose            적용 — originals/erased/injected 세 트리에서
                            canvas 크기인 파일을 to 크기로 변환 (이미 to 면
-                           건너뜀). 원장 행 좌표(canvas 가 원 크기인 행)도
-                           함께 변환. 저장 전 왕복 검증.
+                           건너뜀). 원장 행 좌표도 함께 변환 — 이동 판 안의
+                           사각형만 옮기므로 몇 번을 돌려도 안전(멱등).
+                           저장 전 왕복 검증.
 jaguk recompose --restore  injected 트리의 재조합 파일을 게임 네이티브로
                            복원해 별도 디렉토리에 출력 (원장은 불변 —
                            작업 좌표계는 재조합 기준으로 유지).
@@ -71,22 +72,43 @@ def map_rect(rect: list, spec: dict) -> list:
 
 
 def _transform_rows(data: dict, spec: dict) -> int:
-    """원장 행 좌표를 재조합 좌표계로 — canvas 가 네이티브 크기인 행만."""
+    """원장 행 좌표를 재조합 좌표계로 — 좌표 자체로 동적 판정한다.
+
+    이동 판 안에 있는 사각형만 옮겨지고 밖이면 그대로다 (map_rect 규칙).
+    재조합 좌표계의 사각형은 판 원위치(비워진 영역)에 있을 수 없으므로
+    한 번 변환된 행에 다시 돌려도 변하지 않는다 — 멱등."""
     changed = 0
     for row in ledgermod.rows(data):
         if row.get("file") != spec["file"]:
             continue
-        if row.get("canvas") != list(spec["canvas"]):
-            continue                     # 이미 재조합 좌표계 (또는 무관)
-        row["canvas"] = list(spec["to"])
-        crop = row.get("crop") or {}
-        if crop.get("rect"):
-            crop["rect"] = map_rect(crop["rect"], spec)
+        moved = False
+
+        def remap(rect):
+            nonlocal moved
+            if not rect:
+                return rect
+            if len(rect) == 2:          # [x,y] — 스타일 crop_size 파생형
+                out = map_rect([rect[0], rect[1], 1, 1], spec)[:2]
+            else:
+                out = map_rect(list(rect), spec)
+            if out != list(rect):
+                moved = True
+            return out
+
+        crop = row.get("crop")
+        if isinstance(crop, dict):          # 구형 {id,src,rect}
+            if crop.get("rect"):
+                crop["rect"] = remap(crop["rect"])
+        elif crop:
+            row["crop"] = remap(crop)
         if row.get("text"):
-            row["text"] = map_rect(row["text"], spec)
+            row["text"] = remap(row["text"])
         if row.get("source"):
-            row["source"] = map_rect(row["source"], spec)
-        changed += 1
+            row["source"] = remap(row["source"])
+        if row.get("flow"):
+            row["flow"] = [remap(b) for b in row["flow"]]
+        if moved:
+            changed += 1
     return changed
 
 

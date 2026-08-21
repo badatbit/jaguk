@@ -33,6 +33,9 @@
   #tree .item:hover { background: #262a33; color: var(--fg); }
   #tree .item.sel { background: #24344d; color: var(--fg); }
   #tree .item .ko { color: var(--accent); }
+  #tree .item .undecided { color: var(--dim); font-size: 10px;
+                           border: 1px solid var(--dim); border-radius: 3px;
+                           padding: 0 4px; }
   #tree .sect { padding: 8px 12px 2px; color: var(--dim); font-size: 11px;
                 text-transform: uppercase; letter-spacing: .08em; }
   #view { flex: 1; overflow: auto; padding: 24px;
@@ -76,11 +79,13 @@
   <span class="modes" id="overlays"></span>
   <span style="color:var(--line)">|</span>
   <span class="modes" id="compare"></span>
-  <input type="range" id="alphaSlider" min="0" max="100" value="100"
-         style="width:70px;display:none" title="injected 불투명도 — 왼쪽으로 끌면 원본이 비친다"
-         oninput="overlayAlpha=this.value/100;
-                  const t=document.getElementById('overlayTop');
-                  if (t) t.style.opacity=overlayAlpha;">
+  <input type="range" id="alphaSlider" min="0" max="100" value="50"
+         style="width:90px;display:none"
+         title="왼쪽: 원본만 · 중간: 원본에 텍스트 덧쓰기 · 오른쪽: injected 교체"
+         oninput="if (Math.abs(this.value - 50) <= 4) this.value = 50;
+                  overlayAlpha=this.value/100;
+                  applyOverlayAlpha();
+                  saveState();">
   <span class="file" id="curfile">파일을 선택하세요</span>
   <span class="zoom">
     <span class="modes" id="bgButtons"></span>
@@ -103,7 +108,7 @@ let base = "원본";
 let overlays = {"crop-box": false, "text-box": false};   // 베이스와 독립 토글
 // 비교 보기: "" 단독 | "overlay" 겹침 | "v" 상하 | "h" 좌우 (원본 + injected)
 const COMPARE = {"겹침": "overlay", "상하": "v", "좌우": "h"};
-let compare = "", overlayAlpha = 1.0;   // 겹침 기본 = injected 전면 (100%)
+let compare = "", overlayAlpha = 0.5;   // 겹침 기본 = 중간 (원본에 텍스트 덧쓰기)
 let detail = null, zoom = 1, selected = null;
 
 function el(tag, cls, text) {
@@ -148,8 +153,9 @@ async function loadTree() {
     group.onclick = () =>
       body.style.display = body.style.display === "none" ? "" : "none";
     for (const f of g.files) {
-      const item = el("div", "item",
-        `${f.file.split("/").pop()} (${f.rows})`);
+      const item = el("div", "item", f.file.split("/").pop() + " ");
+      item.appendChild(f.rows === 0 ? el("span", "undecided", "미정")
+                                    : document.createTextNode(`(${f.rows})`));
       item.dataset.file = f.file;
       item.onclick = () => openFile(f.file, item);
       body.appendChild(item);
@@ -159,12 +165,28 @@ async function loadTree() {
   }
   if (tree.files.length) nav.appendChild(el("div", "sect", "파일 (행)"));
   for (const f of tree.files) {
-    const item = el("div", "item", `${f.file} (${f.rows})`);
+    const item = el("div", "item", f.file + " ");
+    item.appendChild(f.rows === 0 ? el("span", "undecided", "미정")
+                                  : document.createTextNode(`(${f.rows})`));
     item.dataset.file = f.file;
     item.style.paddingLeft = "12px";
     item.onclick = () => openFile(f.file, item);
     nav.appendChild(item);
   }
+}
+
+function applyOverlayAlpha() {
+  // 0~0.5: 원본 위에 글자 레이어 0→100%
+  // 0.5~1: (원본+글자) ↔ injected 크로스페이드 — 오른쪽 끝 = injected 단독.
+  // 투명 스프라이트에서도 성립하도록 아래층을 함께 꺼야 한다.
+  const t = overlayAlpha;
+  const fullIn = Math.max(0, t * 2 - 1);
+  const base = document.getElementById("overlayBase");
+  const text = document.getElementById("overlayText");
+  const full = document.getElementById("overlayFull");
+  if (base) base.style.opacity = 1 - fullIn;
+  if (text) text.style.opacity = Math.min(1, t * 2) * (1 - fullIn);
+  if (full) full.style.opacity = fullIn;
 }
 
 function renderModes() {
@@ -192,14 +214,18 @@ function renderModes() {
                         renderModes(); renderStage(); };
     compareBar.appendChild(b);
   }
-  document.getElementById("alphaSlider").style.display =
-    compare === "overlay" ? "" : "none";
+  const slider = document.getElementById("alphaSlider");
+  slider.style.display = compare === "overlay" ? "" : "none";
+  slider.value = Math.round(overlayAlpha * 100);
+  document.getElementById("bgColor").value = bgCustom;
 }
 
 async function openFile(file, item) {
   document.querySelectorAll("#tree .item.sel")
     .forEach(n => n.classList.remove("sel"));
   if (item) item.classList.add("sel");
+  if (detail && detail.file !== file) styleEdits = {};   // 파일 바뀌면 편집 폐기
+  renderEpoch++;                       // 이미지 URL 버전 — 메모리 캐시 무효화
   detail = await (await fetch("/api/file?path=" + encodeURIComponent(file))).json();
   if (detail.error || !detail.rows) {
     // 서버 에러를 화면에 그대로 — 구 서버 + 새 데이터 형식 등
@@ -270,6 +296,7 @@ function applyBg() {
   document.getElementById("view").style.background =
     [CHECKER, "#000000", "#ffffff", bgCustom][bgIndex];
   renderBgButtons();
+  if (typeof saveState === "function") saveState();
 }
 function pickBg(value) { bgCustom = value; bgIndex = 3; applyBg(); }
 
@@ -299,10 +326,29 @@ function rowRect(row, prefix) {
   return vals.some(v => v === null) ? null : vals;
 }
 
-function imgEl(kind) {
+function imgEl(kind, textLayer) {
   const img = document.createElement("img");
-  img.src = "/img/" + kind + "/" + detail.file;
-  img.onload = () => { img.style.width = img.naturalWidth * pxScale() + "px"; };
+  // ?v= 는 openFile 마다 오른다 — 같은 URL 이면 브라우저가 no-store 를
+  // 무시하고 메모리 캐시의 옛 비트맵을 재사용하는 것을 막는다 (저장 직후
+  // 낡은 injected 가 보이던 문제). 순수 UI 재렌더는 같은 v 라 재요청 없음.
+  let src = "/img/" + kind + "/" + detail.file + "?v=" + renderEpoch;
+  if (textLayer) src += "&layer=text";   // 글자 레이어만 (겹침 보기)
+  // 저장 전 스타일 편집이 있으면 라이브 미리보기로 렌더
+  if (kind === "injected" && Object.keys(styleEdits).length)
+    src += "&styles=" + encodeURIComponent(JSON.stringify(styleEdits));
+  img.src = src;
+  if (detail.size) {
+    // 로드 전에 최종 크기로 고정 — 로드 완료 때 튀는 재배치를 없앤다
+    img.style.width = detail.size[0] * pxScale() + "px";
+    img.style.height = detail.size[1] * pxScale() + "px";
+  }
+  img.onload = () => {   // 크기 정보가 없거나 어긋난 경우만 보정
+    const w = img.naturalWidth * pxScale() + "px";
+    if (img.style.width !== w) {
+      img.style.width = w;
+      img.style.height = "auto";
+    }
+  };
   return img;
 }
 
@@ -339,16 +385,23 @@ function renderStage() {
 
   let boxHost = stage;                 // 상자 오버레이를 얹을 컨테이너
   if (compare === "overlay") {
-    // 겹쳐보기 — 원본 위에 injected 를 불투명도 슬라이더로 겹친다
-    stage.appendChild(imgOrMissing("original"));
+    // 겹쳐보기 3구간 — 왼쪽: 원본만 / 중간: 원본+글자 레이어(잉크만) 겹침 /
+    // 오른쪽: injected 완전 교체. 글자 레이어는 배경 없이 렌더한 한글이라
+    // 불투명 영역(널빤지 등)에서도 원문과 한글이 같이 보인다.
+    const baseEl = imgOrMissing("original");
+    baseEl.id = "overlayBase";
+    stage.appendChild(baseEl);
     if (detail.images.injected) {
-      const top = imgEl("injected");
-      top.id = "overlayTop";
-      top.style.position = "absolute";
-      top.style.left = "0";
-      top.style.top = "0";
-      top.style.opacity = overlayAlpha;
-      stage.appendChild(top);
+      for (const [id, textLayer] of [["overlayText", true],
+                                     ["overlayFull", false]]) {
+        const layer = imgEl("injected", textLayer);
+        layer.id = id;
+        layer.style.position = "absolute";
+        layer.style.left = "0";
+        layer.style.top = "0";
+        stage.appendChild(layer);
+      }
+      applyOverlayAlpha();
     }
   } else if (compare === "v" || compare === "h") {
     const row = el("div");
@@ -365,6 +418,8 @@ function renderStage() {
   } else {
     stage.appendChild(imgOrMissing(BASES[base]));
   }
+
+  if (typeof saveState === "function") saveState();
 
   // 상자 오버레이 — 어느 베이스 위에도 겹칠 수 있는 독립 토글
   for (const row of detail.rows) {
@@ -402,6 +457,131 @@ function renderStage() {
 }
 
 function select(id) { selected = id; renderStage(); renderProps(); }
+
+// ---- 스타일 인라인 편집 (변경 즉시 미리보기, 저장 버튼으로 원장 기록) ----
+let styleEdits = {};            // {스타일명: {키: 입력 문자열}} — 저장 전
+let stylePreviewTimer = null;
+let renderEpoch = 0;            // 이미지 URL 버전 (openFile 마다 증가)
+
+function schedulePreview() {
+  clearTimeout(stylePreviewTimer);
+  stylePreviewTimer = setTimeout(renderStage, 250);
+}
+
+function styleValueInput(name, key, value) {
+  const input = document.createElement("input");
+  const pending = styleEdits[name] && key in styleEdits[name];
+  input.value = pending ? styleEdits[name][key]
+    : (typeof value === "object" && value !== null
+       ? JSON.stringify(value) : String(value ?? ""));
+  input.style.cssText =
+    "width:100%;box-sizing:border-box;background:#10151d;border:1px solid " +
+    (pending ? "var(--accent)" : "var(--line)") +
+    ";color:var(--fg);padding:1px 4px;font:inherit";
+  input.oninput = () => {
+    (styleEdits[name] = styleEdits[name] || {})[key] = input.value;
+    input.style.borderColor = "var(--accent)";
+    schedulePreview();
+  };
+  return input;
+}
+
+// drop_shadow(dx=2,dy=2,blur=2.8,color=#000000A0) → 인자별 입력 행으로 펼침
+const SHADOW_RE_JS =
+  /^drop_shadow\(dx=(-?\d+),dy=(-?\d+),blur=([0-9.]+)(?:,color=(#[0-9A-Fa-f]{8}))?\)$/;
+
+function shadowParamRows(t, name, effectInput) {
+  const m = SHADOW_RE_JS.exec(effectInput.value.trim());
+  if (!m) return;
+  const parts = {dx: m[1], dy: m[2], blur: m[3], color: m[4] || ""};
+  const compose = () => `drop_shadow(dx=${parts.dx},dy=${parts.dy}` +
+    `,blur=${parts.blur}` + (parts.color ? `,color=${parts.color}` : "") + ")";
+  const hints = {dx: "가로 오프셋 px", dy: "세로 오프셋 px",
+                 blur: "번짐 반경", color: "#RRGGBBAA (비우면 검정)"};
+  for (const key of ["dx", "dy", "blur", "color"]) {
+    const tr = el("tr");
+    const label = el("td", "k", "· " + key);
+    label.style.paddingLeft = "16px";
+    tr.appendChild(label);
+    const input = document.createElement("input");
+    input.value = parts[key];
+    input.placeholder = hints[key];
+    input.style.cssText =
+      "width:100%;box-sizing:border-box;background:#10151d;border:1px solid " +
+      "var(--line);color:var(--fg);padding:1px 4px;font:inherit";
+    input.oninput = () => {
+      parts[key] = input.value.trim();
+      const value = compose();
+      effectInput.value = value;
+      effectInput.style.borderColor = "var(--accent)";
+      input.style.borderColor = "var(--accent)";
+      (styleEdits[name] = styleEdits[name] || {}).effect = value;
+      schedulePreview();
+    };
+    const td = el("td");
+    td.appendChild(input);
+    tr.appendChild(td);
+    t.appendChild(tr);
+  }
+}
+
+function editableStyleTable(name, style) {
+  const wrap = el("div");
+  const t = el("table");
+  for (const [k, v] of Object.entries(style)) {
+    if (k === "name") continue;
+    const tr = el("tr");
+    tr.appendChild(el("td", "k", k));
+    const td = el("td");
+    const input = styleValueInput(name, k, v);
+    td.appendChild(input);
+    tr.appendChild(td);
+    t.appendChild(tr);
+    if (k === "effect") shadowParamRows(t, name, input);
+  }
+  // 새 키 추가 행 — 키 입력 후 값을 바꾸면 편집에 얹힌다
+  const tr = el("tr");
+  const keyInput = document.createElement("input");
+  keyInput.placeholder = "+키";
+  keyInput.style.cssText = "width:100%;box-sizing:border-box;background:none;" +
+    "border:1px dashed var(--line);color:var(--dim);padding:1px 4px;font:inherit";
+  const valInput = document.createElement("input");
+  valInput.style.cssText = keyInput.style.cssText;
+  valInput.oninput = () => {
+    const key = keyInput.value.trim();
+    if (!key) return;
+    (styleEdits[name] = styleEdits[name] || {})[key] = valInput.value;
+    schedulePreview();
+  };
+  const td1 = el("td", "k"); td1.appendChild(keyInput);
+  const td2 = el("td"); td2.appendChild(valInput);
+  tr.appendChild(td1); tr.appendChild(td2);
+  t.appendChild(tr);
+  wrap.appendChild(t);
+
+  const dirty = !!(styleEdits[name] && Object.keys(styleEdits[name]).length);
+  const save = toolButton("💾 저장", async () => {
+    const updates = styleEdits[name];
+    if (!updates || !Object.keys(updates).length) return;
+    busy("스타일 저장 중…");
+    const result = await postOp("/api/style/update?path=" +
+      encodeURIComponent(detail.file), {name, updates});
+    if (result.ok) delete styleEdits[name];
+    finishOp(result, selected);
+  }, dirty);
+  save.style.marginTop = "4px";
+  wrap.appendChild(save);
+  const revert = toolButton("↩ 되돌리기", () => {
+    // 저장 안 한 편집 폐기 — 원장의 현재 값으로 입력·미리보기 복귀
+    if (!styleEdits[name]) return;
+    delete styleEdits[name];
+    renderStage();
+    renderProps();
+  }, dirty);
+  revert.style.marginTop = "4px";
+  wrap.appendChild(revert);
+  return wrap;
+}
 
 function table(obj, skipEmpty = true) {
   const t = el("table");
@@ -527,6 +707,48 @@ function toolButton(label, onclick, active) {
   return b;
 }
 
+function renderRecompose(pane) {
+  // 원장 recompose 스펙이 있는 파일 — 재조합 정보를 스탯으로 보여준다
+  if (!detail || !detail.recompose) return;
+  const rc = detail.recompose;
+  pane.appendChild(el("h3", "", "🧩 리컴포지트"));
+  const t = el("table");
+  const kv = (k, v) => {
+    const tr = el("tr");
+    tr.appendChild(el("td", "k", k));
+    tr.appendChild(el("td", "", v));
+    t.appendChild(tr);
+  };
+  kv("네이티브", rc.canvas.join(" × "));
+  kv("작업 캔버스", rc.to.join(" × "));
+  rc.moves.forEach((m, i) =>
+    kv(`조각 ${i + 1}`, `(${m[0]}, ${m[1]}) ${m[2]}×${m[3]} → (${m[4]}, ${m[5]})`));
+  pane.appendChild(t);
+}
+
+function renderPost(pane) {
+  // 파일 단위 후처리(post) — 글자 위에 레이어를 다시 덮는 overlay 등
+  if (!detail || !detail.post || !detail.post.length) return;
+  pane.appendChild(el("h3", "", "🖼 후처리 (post)"));
+  for (const p of detail.post) {
+    const t = el("table");
+    const kv = (k, v) => {
+      if (v === undefined || v === null || v === "") return;
+      const tr = el("tr");
+      tr.appendChild(el("td", "k", k));
+      tr.appendChild(el("td", "", String(v)));
+      t.appendChild(tr);
+    };
+    kv("op", p.op);
+    kv("layer", p.layer);
+    kv("alpha", p.alpha !== undefined ? p.alpha + " / 255" : "255 (기본)");
+    kv("alpha_white", p.alpha_white !== undefined
+                      ? p.alpha_white + " / 255 (순백 픽셀)" : undefined);
+    kv("note", p.note);
+    pane.appendChild(t);
+  }
+}
+
 function renderBoxList(pane) {
   pane.appendChild(toolButton("🔄 박스 지우고 OCR 다시", reextract));
   pane.appendChild(toolButton(
@@ -535,6 +757,8 @@ function renderBoxList(pane) {
             renderStage(); renderProps(); },
     editMode === "add"));
   pane.appendChild(toolButton("🚫 파일 제외", dropFile));
+  renderRecompose(pane);
+  renderPost(pane);
   // 파일 선택 직후 — crop/text 상자 목록. 항목 클릭 = 상자 선택
   pane.appendChild(el("h3", "", `상자 목록 (${detail.rows.length}행)`));
   const t = el("table");
@@ -575,6 +799,8 @@ function renderProps() {
     } else {
       pane.appendChild(toolButton("🔄 박스 지우고 OCR 다시", reextract));
       pane.appendChild(toolButton("🚫 파일 제외", dropFile));
+      renderRecompose(pane);
+      renderPost(pane);
       pane.appendChild(el("div", "empty", "이 파일에는 행이 없습니다."));
     }
     return;
@@ -608,8 +834,48 @@ function renderProps() {
     pane.appendChild(banner);
   }
 
-  // ① inline — 일반 행이면 구조형 행, text-only 항목이면 entry
+  // 스타일 지정 — 원장의 스타일 중에서 고른다 (선택 즉시 저장)
   const isCatalogRow = !!row.catalog;
+  const styleRow = el("div");
+  styleRow.style.cssText = "margin:2px 0 8px;display:flex;gap:6px;" +
+                           "align-items:center";
+  styleRow.appendChild(el("span", "k", "스타일"));
+  const sel = document.createElement("select");
+  sel.style.cssText = "flex:1;background:#10151d;border:1px solid var(--line);" +
+                      "color:var(--fg);padding:2px 4px;font:inherit";
+  const noneOpt = document.createElement("option");
+  noneOpt.value = ""; noneOpt.textContent = "(없음)";
+  sel.appendChild(noneOpt);
+  const labelFor = n => n + (detail.styles[n].label
+                             ? " — " + detail.styles[n].label : "");
+  for (const name of Object.keys(detail.styles).sort()) {
+    const o = document.createElement("option");
+    o.value = name;
+    o.textContent = name;              // 닫힘 표시는 이름만
+    o.title = labelFor(name);
+    sel.appendChild(o);
+  }
+  // 펼치면 라벨까지, 닫으면 이름만 — select 는 선택된 option 의 텍스트를
+  // 그대로 보여주므로 focus/blur 에서 텍스트를 바꿔치기한다
+  const expand = () => { for (const o of sel.options)
+    if (o.value) o.textContent = labelFor(o.value); };
+  const collapse = () => { for (const o of sel.options)
+    if (o.value) o.textContent = o.value; };
+  sel.onfocus = expand;
+  sel.onblur = collapse;
+  sel.value = row.style || "";
+  sel.onchange = async () => {
+    collapse();
+    const id = selected;
+    busy("스타일 지정 변경 중…");
+    finishOp(await postOp("/api/box/style?path=" +
+      encodeURIComponent(detail.file) + "&id=" + encodeURIComponent(id),
+      {style: sel.value}), id);
+  };
+  styleRow.appendChild(sel);
+  pane.appendChild(styleRow);
+
+  // ① inline — 일반 행이면 구조형 행, text-only 항목이면 entry
   pane.appendChild(el("h3", "", "Inline — " + selected));
   if (isCatalogRow && detail.entry) {
     pane.appendChild(table(detail.entry));
@@ -619,13 +885,44 @@ function renderProps() {
     pane.appendChild(table(row));
   }
 
+  // ①′ 해석 결과 — 슬롯·스타일(crop_size/pad)·용어표 파생이 끝난 렌더 입력값.
+  // Inline 은 "기록"이고 이것이 실제로 그려지는 값이다.
+  {
+    const raw = detail.raw[selected];
+    const inlineKo = isCatalogRow ? (detail.entry && detail.entry.ko)
+                                  : (raw && raw.ko);
+    const t = el("table");
+    const kv = (k, v) => {
+      if (v === undefined || v === null || v === "" || v === "—") return;
+      const tr = el("tr");
+      tr.appendChild(el("td", "k", k));
+      tr.appendChild(el("td", "", String(v)));
+      t.appendChild(tr);
+    };
+    kv("원문 jp", row.jp_text);
+    kv("번역 ko", row.ko_text &&
+       row.ko_text + (!inlineKo ? "   ← terms(용어표)" : ""));
+    kv("text", rectLabel(row, "text_"));
+    kv("crop", rectLabel(row, "crop_"));
+    kv("source", rectLabel(row, "source_", ["box_w", "box_h"]));
+    kv("style", row.style);
+    kv("opacity", row.opacity !== "FF" ? row.opacity : undefined);
+    kv("overflow", row.overflow);
+    kv("slot", row.slot);
+    kv("base", row.base);
+    kv("canvas", row.canvas_w ? `${row.canvas_w} × ${row.canvas_h}` : undefined);
+    pane.appendChild(el("h3", "", "해석 결과 (렌더 입력)"));
+    pane.appendChild(t);
+  }
+
   // ② text-only 묶음 기본값 (해당하면)
   if (isCatalogRow && detail.catalog) {
     pane.appendChild(el("h3", "", "Catalog — " + detail.catalog.name));
     pane.appendChild(table(detail.catalog));
   }
 
-  // ③ style — base 사슬을 따라 상위 style 을 아래로 계속 표시
+  // ③ style — base 사슬을 따라 상위 style 을 아래로 계속 표시.
+  // 값은 바로 편집 가능: 바꾸면 미리보기 즉시 반영, 💾 저장으로 원장 기록
   let styleName = row.style;
   const seen = new Set();
   while (styleName && detail.styles[styleName] && !seen.has(styleName)) {
@@ -633,7 +930,7 @@ function renderProps() {
     const style = detail.styles[styleName];
     pane.appendChild(el("h3", "",
       (seen.size === 1 ? "Style — " : "상위 Style — ") + styleName));
-    pane.appendChild(table(style));
+    pane.appendChild(editableStyleTable(styleName, style));
     styleName = style.base;
   }
 
@@ -811,9 +1108,50 @@ stageEl.addEventListener("click", ev => {
          "&id=" + encodeURIComponent(id), {at: x}).then(finishOp);
 }, true);
 
+// ---- 상태 유지 — 새로고침해도 파일·배율·배경·메뉴 선택이 남는다 ----
+const STORE_KEY = "jaguk-gui-state";
+
+function saveState() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({
+      base, overlays, compare, overlayAlpha, zoom, bgIndex, bgCustom,
+      file: detail ? detail.file : null,
+    }));
+  } catch (e) { /* localStorage 불가 환경 — 상태 유지만 포기 */ }
+}
+
+function restoreState() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
+    if (!s) return null;
+    if (s.base in BASES) base = s.base;
+    if (s.overlays)
+      for (const k of Object.keys(overlays))
+        if (typeof s.overlays[k] === "boolean") overlays[k] = s.overlays[k];
+    if (Object.values(COMPARE).includes(s.compare) || s.compare === "")
+      compare = s.compare;
+    if (typeof s.overlayAlpha === "number") overlayAlpha = s.overlayAlpha;
+    if (typeof s.zoom === "number") zoom = Math.min(8, Math.max(0.25, s.zoom));
+    if (Number.isInteger(s.bgIndex) && s.bgIndex >= 0 && s.bgIndex <= 3)
+      bgIndex = s.bgIndex;
+    if (typeof s.bgCustom === "string") bgCustom = s.bgCustom;
+    return typeof s.file === "string" ? s.file : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+const restoredFile = restoreState();
 renderModes();
 renderBgButtons();
-loadTree();
+applyBg();
+loadTree().then(() => {
+  if (!restoredFile) return;
+  // 트리에서 해당 항목을 찾아 선택 표시까지 복원
+  const item = document.querySelector(
+    `#tree .item[data-file="${CSS.escape(restoredFile)}"]`);
+  openFile(restoredFile, item);
+});
 // OS 배율·브라우저 줌 변경 시 devicePixelRatio 가 바뀐다 — 픽셀 정합 재계산
 window.addEventListener("resize", () => { if (detail) renderStage(); });
 </script>

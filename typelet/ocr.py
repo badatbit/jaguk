@@ -561,7 +561,7 @@ def seed_rows(data: dict, results: list[dict]) -> tuple[int, int]:
                 "crop": None,
                 "text": list(box),      # 시작점 — 배치 정하면서 다듬는다
                 "source": list(box),
-                "canvas": [entry["width"], entry["height"]],
+                "canvas": None,         # blank 베이스 전용 — 일반 행엔 안 쓴다
                 "pad": None,
                 "style": "",
                 "opacity": "FF",
