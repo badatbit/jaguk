@@ -70,6 +70,13 @@ python -m venv .venv
 쓴다. 언어는 설정 `ocr_lang` 에 BCP-47("ja")로 적는다 — tesseract 코드("jpn")
 변환은 내부에서 한다. 어느 백엔드든 결과 형태(줄 단위 text + x,y,w,h)는 같다.
 
+- `ocr_min_conf`(기본 0.2) — easyocr 검출 신뢰도 하한. 그림을 글자로 오인한
+  저신뢰 검출을 거른다.
+- `ocr_recognizer: "manga-ocr"` — 탐지된 각 줄의 **판독**을 일본어 특화 모델로
+  다시 한다(상자는 백엔드가, 글자는 manga-ocr 가). `pip install .[mangaocr]`.
+  오독·환각이 크게 준다 — furaiki3 프로젝트의 실전 조합은
+  `easyocr`(탐지) + `manga-ocr`(판독)다.
+
 ## 워크플로
 
 ```
