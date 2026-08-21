@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", default="",
                    help="raw JSON 저장 경로 (프로젝트 루트 기준)")
 
-    p = sub.add_parser("erase", help="무문자 베이스 생성 (→ base)")
+    p = sub.add_parser("erase", help="무문자 베이스 생성 (→ erased)")
     p.add_argument("--only", default="")
     p.add_argument("--method", default="auto",
                    choices=("auto", "inpaint", "median", "alpha", "fill"))
@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--force", action="store_true",
                    help="이미 있는 베이스(손질본일 수 있음)도 덮어쓴다")
 
-    p = sub.add_parser("render", help="번역 렌더 (→ out)")
+    p = sub.add_parser("render", help="번역 렌더 (→ injected)")
     p.add_argument("--status", action="append",
                    help="렌더링할 status. 반복 지정 가능 (기본: render_ready)")
     p.add_argument("--only", default="", help="파일명 부분일치 필터")

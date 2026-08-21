@@ -1,7 +1,7 @@
 # type-lettering
 
 이미지 속 텍스트를 **추출(OCR) → 지우기 → 주입(번역 렌더)** 하는 범용 파이프라인.
-furaiki3-l10n 의 `imgtext` 파이프라인에서 이미지 처리 부분만 떼어, 게임 의존성
+furaiki3-l10n 의 옛 이미지 파이프라인에서 이미지 처리 부분만 떼어, 게임 의존성
 (아카이브 덤프/주입, exe 좌표 검증 등) 없이 독립시킨 프로그램이다.
 
 CLI 는 둘이다:
@@ -30,6 +30,10 @@ jaguk extract                           # ③ 마킹된 파일만 **본 OCR** �
                                         #    (ignore 는 OCR 도 안 함, 규칙 --dict 는 그 무리에만 교정)
 jaguk erase [--method fill --color '#0a579d']   # ④ 텍스트 지우기 → erased/
 jaguk inject                            # ⑤ 번역 주입 렌더 → injected/
+                                        #    (recompose 스펙이 있으면 저장 때 네이티브 복원)
+jaguk recompose                         # 조각난 아틀라스를 작업 좌표계로 (멱등)
+jaguk drop <경로...>                    # 파일/디렉토리 제외 (ignore 규칙)
+jaguk gui                               # 웹 GUI — 미리보기·상자/스타일 편집
 jaguk status
 ```
 
@@ -53,8 +57,8 @@ python -m venv .venv
 .venv\Scripts\pip install -e .[inpaint]
 ```
 
-CLI 는 `typelet` 하나다. 지우기·렌더는 OS 무관이고, 추출(OCR)은 백엔드를
-고른다 (`--backend` 또는 설정 `ocr_backend`, 기본 `auto`):
+지우기·렌더는 OS 무관이고, 추출(OCR)은 백엔드를 고른다
+(`--backend` 또는 설정 `ocr_backend`, 기본 `auto`):
 
 | 백엔드 | 플랫폼 | 준비물 |
 |---|---|---|
@@ -74,11 +78,11 @@ cd myproject
 # originals/ 에 원본 이미지를 넣는다
 typelet extract --seed          # ① 추출 — OCR 로 원문·좌표 → 원장 씨앗 행
 typelet preview                 # 상자 확인 (preview/boxes)
-typelet erase                   # ② 지우기 — 무문자 베이스 생성 (base/)
+typelet erase                   # ② 지우기 — 무문자 베이스 생성 (erased/)
 #   방식: inpaint(OpenCV)/median/alpha/fill(--color #RRGGBB 단색 채움)
-#   base/ 의 결과를 손봐도 된다 — 재실행해도 --force 없이는 안 덮는다
-# lettering.json 에서 ko·style 을 채우고 status 를 render_ready 로
-typelet render                  # ③ 주입 — base/ + 원장 → out/
+#   erased/ 의 결과를 손봐도 된다 — 재실행해도 --force 없이는 안 덮는다
+# data/lettering.json 에서 ko·style 을 채우고 status 를 render_ready 로
+typelet render                  # ③ 주입 — erased/ + 원장 → injected/
 typelet render --on-original    # 원본 위 덧구움 비교본 (preview/ko-on-original)
 typelet status                  # 진행 상황
 ```
@@ -87,18 +91,17 @@ typelet status                  # 진행 상황
 
 ```
 typelet.config.json   설정 — 경로·글꼴 매핑·OCR 언어. 이 파일이 있는 곳이 루트
-lettering.json        원장 — 스타일 + 행. 파일이 원본이다
 originals/            작업 원본 이미지 트리 (읽기 전용 취급)
-data/                 작업 데이터 저장소 — scan.json·원장 (jaguk 이 쓴다)
+data/                 작업 데이터 저장소 — 원장(lettering.json)·scan.json
 erased/               텍스트 지운 이미지 (erase 출력 + 손질본)
-injected/             텍스트 주입 결과 (render 출력)
+injected/             텍스트 주입 결과 (jaguk inject 출력)
 preview/              검수 산출물 (boxes, ko-on-original)
 fonts/                글꼴 파일 — 설정 "fonts" 의 "패밀리/weight" → 파일 매핑
 ```
 
 ## 원장 (lettering.json)
 
-furaiki3-l10n 의 `image_text.json` 과 같은 스키마다 — 그대로 복사해 와도 된다.
+furaiki3-l10n 의 `data-images/lettering.json` 이 이 스키마를 그대로 쓴다.
 행 = `{box_id, file, jp, ko, crop, text, source, canvas, style, opacity, status, …}`,
 스타일 = `{name, font_family_ko, font_weight, font_size_px, fill_rgb, outline_*,
 effect, text_align, …}`. 상세는 [typelet/ledger.py](typelet/ledger.py) 도크스트링.
@@ -110,7 +113,7 @@ effect, text_align, …}`. 상세는 [typelet/ledger.py](typelet/ledger.py) 도�
 - `status` 가 `render_ready` 인 행만 렌더된다. OCR 씨앗 행은 `todo` 로 들어온다.
 - 렌더러 기능: run(한 상자 여러 스타일 이어 그리기), flow(어절 단위 자동
   줄바꿈), 세로쓰기, 균등 분배, drop_shadow / rotate / italic(전단) 효과,
-  4x 슈퍼샘플 AA, alpha_clear · rgb_ink(알파 구운 스프라이트 직접 기록),
+  슈퍼샘플 AA(설정 `supersample`, 기본 4·1=끔), alpha_clear · rgb_ink(알파 구운 스프라이트 직접 기록),
   post overlay(선화 레이어 재합성), 비텍스트 영역 불변 검증.
 
 ## text-only 묶음 — 텍스트만 달랑 있는 이미지들
@@ -135,11 +138,7 @@ saveloadspotname 처럼 **이미지 전체가 글자 하나**인 파일 무리�
 - `overflow: "squeeze"` — 번역이 상자보다 넓으면 **가로만** 압축 (크기·높이
   불변, spotname 258장의 검증된 규칙).
 - `canvas: "original"` — 장마다 크기가 다르면 원본 이미지 크기를 쓴다.
-- `fit: "original-body"` — 크기·테두리·자리를 원장에 굽지 않고 **원본을
-  실측해 재현**한다 (touringspotname 규칙: 몸통 높이에 맞는 최대 크기,
-  테두리 폭은 잉크 여백 실측, 가로 중앙·세로는 몸통 상단). 원본이 필요하고
-  text 상자·canvas·font_size_px 는 생략 가능하다.
-- entries 항목은 canvas·text·style·opacity·overflow·fit 을 개별 override 할
+- entries 항목은 canvas·text·style·opacity·overflow 를 개별 override 할
   수 있다.
 - 씨앗: `typelet extract --catalog saveloadspotname` — 묶음 dir 의 파일만
   OCR 해 `파일명 → jp` 로 entries 를 채운다 (기존 항목 유지).
@@ -166,9 +165,6 @@ TSV(`원문<TAB>번역`), 평면 맵 `{"원문": "번역"}`, 중첩 맵
 
 스타일 `squeeze_min`(0~1)은 squeeze 의 압축 하한 — 그 이상 눌리느니 정렬
 앵커 기준으로 상자를 넘치게 둔다 (안내판 규칙).
-
-`tools/migrate_roadguide.py` 는 furaiki3 방면 안내판 434장을 이 구조로
-이관하는 어댑터다 (실측 레이아웃 JSON → 행 1,745개 + terms 참조).
 
 ## 재조합(recompose) — 조각난 아틀라스를 게임이 그리는 모양으로
 
@@ -224,12 +220,12 @@ furaiki3 internetmode1a/2/3/4a 실측):
 오답 짝 16.5). 새 아틀라스는 AI 에게 "이 아틀라스 이음새 분석해서 recompose
 스펙 만들어줘"라고 시키고 GUI 로 눈검증 후 고정하면 된다.
 
-주의: `fit`/text-only 묶음과 마찬가지로, 이미 추출된 행 좌표는 recompose 실행
-시점에 canvas 가 네이티브 크기인 것만 자동 변환된다 — 재조합 이후에 추출한
-행은 이미 맞는 좌표계다.
+행 좌표 변환은 좌표 자체로 판정한다 — 이동 판 안의 사각형만 옮겨지므로
+몇 번을 돌려도 안전하다(멱등). `jaguk inject` 는 저장할 때 재조합 파일을
+게임 네이티브로 자동 복원한다.
 
 ## 무엇이 여기 없나
 
 원본 이미지를 어디서 가져오고 결과를 어디에 넣는지는 이 도구의 관심사가
-아니다 — 게임 아카이브 덤프/재주입(`raiki imgtext dump/inject`)은 furaiki3-l10n
-에 남아 있다. 이 도구는 `originals/ → out/` 디렉토리 트리만 안다.
+아니다 — 게임 아카이브 덤프/재주입(`raiki extract image` · `raiki build image`)은
+furaiki3-l10n 에 남아 있다. 이 도구는 `originals/ → injected/` 디렉토리 트리만 안다.
