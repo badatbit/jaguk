@@ -25,8 +25,11 @@
   main { flex: 1; display: flex; min-height: 0; }
   #tree { width: 300px; overflow-y: auto; background: var(--panel);
           border-right: 1px solid var(--line); padding: 8px 0; }
-  #tree .group { padding: 5px 12px; cursor: pointer; font-weight: bold; }
+  #tree .group { padding: 5px 12px; cursor: pointer; font-weight: bold;
+                 border-left: 3px solid transparent; }
   #tree .group:hover { background: #262a33; }
+  #tree .group.active { background: #1b2740; color: var(--accent);
+                        border-left-color: var(--accent); }
   #tree .group .n { color: var(--dim); font-weight: normal; }
   #tree .item { padding: 3px 12px 3px 26px; cursor: pointer; white-space: nowrap;
                 overflow: hidden; text-overflow: ellipsis; color: var(--dim); }
@@ -53,8 +56,13 @@
   .box.err  { border: 1px dashed #ff5340; }
   .box.err .tag { color: #ff8a7a; }
   .box.sel  { outline: 2px solid var(--accent); }
+  /* 투명 히트 영역 — 테두리 없이 클릭만. 호버 시 살짝 비친다 */
+  .box.hit  { background: transparent; }
+  .box.hit:hover { background: rgba(90,200,255,.14);
+                   outline: 1px dashed rgba(90,200,255,.5); }
   .handle { position: absolute; width: 8px; height: 8px; z-index: 5;
             background: var(--accent); border: 1px solid #0c1420; }
+  .handle.rot { width: 10px; height: 10px; background: #ffcc44; }
   .box .tag { position: absolute; top: -16px; left: -1px; font-size: 10px;
               background: rgba(0,0,0,.75); padding: 0 4px; white-space: nowrap; }
   #props { width: 420px; overflow-y: auto; background: var(--panel);
@@ -99,17 +107,19 @@
 <main>
   <nav id="tree">불러오는 중…</nav>
   <section id="view"><div id="stage"></div></section>
-  <aside id="props"><div class="empty">crop-box / text-box 토글을 켜고 상자를
-    클릭하면 속성이 표시됩니다.</div></aside>
+  <aside id="props"><div class="empty">이미지 위 상자 영역을 클릭하면 속성이
+    표시됩니다. (테두리를 보려면 crop-box / text-box 토글)</div></aside>
 </main>
 <script>
 const BASES = {"원본": "original", "erased": "erased", "injected": "injected"};
 let base = "원본";
 let overlays = {"crop-box": false, "text-box": false};   // 베이스와 독립 토글
+let syncBoxes = true;            // 켜면 상자 편집 시 crop·text·source 동기화 (기본 ON)
 // 비교 보기: "" 단독 | "overlay" 겹침 | "v" 상하 | "h" 좌우 (원본 + injected)
 const COMPARE = {"겹침": "overlay", "상하": "v", "좌우": "h"};
 let compare = "", overlayAlpha = 0.5;   // 겹침 기본 = 중간 (원본에 텍스트 덧쓰기)
 let detail = null, zoom = 1, selected = null;
+let currentGroup = null;         // 열려 있는 overlay 그룹명 (공유 base 구분)
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -144,20 +154,30 @@ async function loadTree() {
   }
   if ((tree.groups || []).length)
     nav.appendChild(el("div", "sect", "규칙 그룹"));
+  const openFileName = detail && detail.file;   // 지금 열려 있는 파일
   for (const g of tree.groups || []) {
     const group = el("div", "group");
+    group.dataset.group = g.name;
     group.appendChild(document.createTextNode(g.name + " "));
     group.appendChild(el("span", "n", `(${g.count} · ${g.mode})`));
+    // 추출된 행이 하나도 없으면(=아직 손 안 댄 그룹) 그룹 이름 옆에 미정.
+    // 개별 파일(특히 base)엔 미정을 안 붙인다 — 그룹 단위로 옮김.
+    if (g.files.every(f => f.rows === 0))
+      group.appendChild(el("span", "undecided", " 미정"));
     const body = el("div");
-    body.style.display = "none";
+    // 지금 열린 파일이 속한 그룹은 강조 + 펼쳐 둔다
+    const active = g.name === currentGroup;
+    if (active) group.classList.add("active");
+    body.style.display = active ? "" : "none";
     group.onclick = () =>
       body.style.display = body.style.display === "none" ? "" : "none";
     for (const f of g.files) {
       const item = el("div", "item", f.file.split("/").pop() + " ");
-      item.appendChild(f.rows === 0 ? el("span", "undecided", "미정")
-                                    : document.createTextNode(`(${f.rows})`));
+      if (f.rows > 0) item.appendChild(document.createTextNode(`(${f.rows})`));
       item.dataset.file = f.file;
-      item.onclick = () => openFile(f.file, item);
+      item.dataset.group = g.name;    // 공유 base 가 어느 그룹으로 열릴지
+      if (active && f.file === openFileName) item.classList.add("sel");
+      item.onclick = () => openFile(f.file, item, g.name);
       body.appendChild(item);
     }
     nav.appendChild(group);
@@ -205,6 +225,20 @@ function renderModes() {
                         renderModes(); renderStage(); };
     overlayBar.appendChild(b);
   }
+  // crop·text 동기화 토글 — 켜면 상자 하나를 옮길 때 셋(text·crop·source)이 함께
+  const syncBtn = el("button", syncBoxes ? "on" : "", "동기화");
+  syncBtn.title = "crop·text·source 상자를 한 몸으로 (편집 시 같이 이동)";
+  syncBtn.onclick = () => { syncBoxes = !syncBoxes; renderModes(); };
+  overlayBar.appendChild(syncBtn);
+  // 현재 그룹의 상자들을 지금 즉시 동기화 (crop=text=source)
+  const syncNow = el("button", "", "⇔ 전체 동기화");
+  syncNow.title = "지금 이 그룹의 모든 상자를 text 기준으로 맞춘다";
+  syncNow.onclick = async () => {
+    busy("동기화 중…");
+    finishOp(await postOp("/api/box/sync?path=" +
+      encodeURIComponent(detail.file), {scope: "file"}), selected);
+  };
+  overlayBar.appendChild(syncNow);
   const compareBar = document.getElementById("compare");
   compareBar.textContent = "";
   for (const [name, value] of Object.entries(COMPARE)) {
@@ -220,13 +254,15 @@ function renderModes() {
   document.getElementById("bgColor").value = bgCustom;
 }
 
-async function openFile(file, item) {
+async function openFile(file, item, group) {
   document.querySelectorAll("#tree .item.sel")
     .forEach(n => n.classList.remove("sel"));
   if (item) item.classList.add("sel");
   if (detail && detail.file !== file) styleEdits = {};   // 파일 바뀌면 편집 폐기
+  currentGroup = group || null;        // 공유 base 를 어느 그룹으로 열지 기억
   renderEpoch++;                       // 이미지 URL 버전 — 메모리 캐시 무효화
-  detail = await (await fetch("/api/file?path=" + encodeURIComponent(file))).json();
+  detail = await (await fetch("/api/file?path=" + encodeURIComponent(file) +
+    (group ? "&group=" + encodeURIComponent(group) : ""))).json();
   if (detail.error || !detail.rows) {
     // 서버 에러를 화면에 그대로 — 구 서버 + 새 데이터 형식 등
     const stage = document.getElementById("stage");
@@ -242,9 +278,32 @@ async function openFile(file, item) {
     return;
   }
   selected = null;
+  currentGroup = detail.group || currentGroup;   // 서버가 해석한 실제 그룹
   document.getElementById("curfile").textContent = file;
   renderStage();
   renderProps();
+  markActiveGroup();                    // 트리에서 이 파일의 그룹 강조 + 펼치기
+}
+
+// 지금 열린 파일이 속한 규칙 그룹을 트리에서 강조하고 펼친다 (그룹이 닫혀
+// 있어도 어디에 속하는지 보이게). 열린 파일 항목도 sel 로 표시.
+function markActiveGroup() {
+  document.querySelectorAll("#tree .group.active")
+    .forEach(g => g.classList.remove("active"));
+  document.querySelectorAll("#tree .item.sel")
+    .forEach(i => i.classList.remove("sel"));
+  if (!currentGroup) return;
+  const g = [...document.querySelectorAll("#tree .group")]
+    .find(el => el.dataset.group === currentGroup);
+  if (g) {
+    g.classList.add("active");
+    if (g.nextElementSibling) g.nextElementSibling.style.display = "";  // 펼치기
+    g.scrollIntoView({block: "nearest"});
+  }
+  const openName = detail && detail.file;
+  const it = [...document.querySelectorAll("#tree .item")].find(
+    i => i.dataset.file === openName && i.dataset.group === currentGroup);
+  if (it) it.classList.add("sel");
 }
 
 function setZoom(z) { zoom = Math.min(8, Math.max(0.25, z)); renderStage(); }
@@ -332,6 +391,7 @@ function imgEl(kind, textLayer) {
   // 무시하고 메모리 캐시의 옛 비트맵을 재사용하는 것을 막는다 (저장 직후
   // 낡은 injected 가 보이던 문제). 순수 UI 재렌더는 같은 v 라 재요청 없음.
   let src = "/img/" + kind + "/" + detail.file + "?v=" + renderEpoch;
+  if (detail.group) src += "&group=" + encodeURIComponent(detail.group);
   if (textLayer) src += "&layer=text";   // 글자 레이어만 (겹침 보기)
   // 저장 전 스타일 편집이 있으면 라이브 미리보기로 렌더
   if (kind === "injected" && Object.keys(styleEdits).length)
@@ -446,11 +506,27 @@ function renderStage() {
           : id + " " + (row.style || "");
         const div = boxDiv(problem ? "text err" : "text", text, label,
                            () => select(id));
+        // 상자별 틸트 각도를 미리보기로 (렌더는 PIL CCW, CSS 는 -angle)
+        const ang = (detail.raw[id] && detail.raw[id].angle) || 0;
+        if (ang) {
+          div.style.transformOrigin = "center";
+          div.style.transform = "rotate(" + (-ang) + "deg)";
+        }
         if (selected === id) {
           if (!overlays["crop-box"]) div.classList.add("sel");
           addHandles(div, "text", text, id);
         }
         boxHost.appendChild(div);
+      }
+    }
+    // 토글을 켜지 않아도 박스 영역을 직접 클릭하면 선택되게 — 투명 히트 영역.
+    // (crop 우선, 없으면 text) 토글이 켜져 있으면 위의 박스가 클릭을 처리한다.
+    if (!overlays["crop-box"] && !overlays["text-box"]) {
+      const rect = rowRect(row, "crop") || rowRect(row, "text");
+      if (rect) {
+        const hit = boxDiv(selected === id ? "hit sel" : "hit", rect, "",
+                           () => select(id));
+        boxHost.appendChild(hit);
       }
     }
   }
@@ -468,95 +544,354 @@ function schedulePreview() {
   stylePreviewTimer = setTimeout(renderStage, 250);
 }
 
+// 스타일의 기본 필드 — 새 스타일이라 값이 아직 없어도 이 행들은 항상 보인다.
+// [키, 힌트(placeholder)]. render.py 가 실제로 읽는 키와 이름을 맞춘다.
+const BASIC_STYLE_FIELDS = [
+  ["font_family_ko", "글꼴 패밀리 (예: IBM Plex Sans KR)"],
+  ["font_weight",    "굵기 (400 / 500 / 600)"],
+  ["font_size_px",   "글자 크기 px"],
+  ["text_align",     "[가로 l/m/r][세로 t/m/b] (예: mm)"],
+  ["fill_rgb",       "글자색 #RRGGBB (또는 #RRGGBBAA = 알파)"],
+];
+// 선택 필드 — 기본으로는 안 보이고, '＋키 추가' 드롭다운으로 넣는다.
+// 값을 안 넣으면 각자의 기본(font_style=regular, orientation=가로)이 쓰인다.
+const OPTIONAL_STYLE_FIELDS = [
+  ["font_style",        "regular | italic (기본 regular)"],
+  ["orientation",       "가로 | vertical (기본 가로쓰기)"],
+  ["line_height",       "세로쓰기 줄 간격 = size 배수 (예: 1.3, 0=기본)"],
+  ["outline_rgb",       "외곽선색 #RRGGBB"],
+  ["outline_weight_px", "외곽선 두께 px"],
+  ["effect",            "그림자(drop_shadow) — dx·dy·blur·color 4칸"],
+  ["offset_x",          "가로 이동 px"],
+  ["offset_y",          "세로 이동 px"],
+  ["distribute",        "상자 폭 균등 분배 (true/false)"],
+  ["squeeze_min",       "가로 압축 하한 0~1"],
+  ["crop_size",         "[w,h] — crop 크기 (행 crop 은 [x,y]만 둘 때)"],
+  ["pad",               '{"l","t","r","b"} px — crop 에서 text 상자 파생'],
+  ["base",              "상속할 스타일명"],
+];
+const ALL_STYLE_FIELDS = [...BASIC_STYLE_FIELDS, ...OPTIONAL_STYLE_FIELDS];
+const STYLE_HINTS = Object.fromEntries(ALL_STYLE_FIELDS);
+const DEFAULT_SHADOW = "drop_shadow(dx=2,dy=2,blur=2)";
+// '＋키 추가' 로 넣을 때 미리 채워줄 프리셋 (없는 키는 빈 값으로 열림)
+const STYLE_KEY_PRESETS = { effect: DEFAULT_SHADOW };
+// 사용자가 드롭다운으로 드러낸(아직 값은 없는) 선택 키 — 스타일명별
+const styleExtraKeys = {};
+// 스타일명 → 저장/되돌리기 버튼 dirty 표시를 다시 칠하는 함수 (라이브 갱신)
+const styleDirtyRefreshers = {};
+
+// 툴 버튼(저장·되돌리기 등)의 하이라이트 on/off
+function setToolActive(btn, active) {
+  if (!btn) return;
+  btn.className = active ? "on" : "";
+  btn.style.borderColor = active ? "var(--accent)" : "var(--line)";
+}
+
+// 스타일 편집값 반영 — 원래 값과 같아지면 편집을 지워(하이라이트 off) 준다
+function styleEditSet(name, key, val, origStr) {
+  if (val === origStr) {
+    if (styleEdits[name]) {
+      delete styleEdits[name][key];
+      if (!Object.keys(styleEdits[name]).length) delete styleEdits[name];
+    }
+  } else {
+    (styleEdits[name] = styleEdits[name] || {})[key] = val;
+  }
+  if (styleDirtyRefreshers[name]) styleDirtyRefreshers[name]();
+}
+
 function styleValueInput(name, key, value) {
   const input = document.createElement("input");
-  const pending = styleEdits[name] && key in styleEdits[name];
-  input.value = pending ? styleEdits[name][key]
-    : (typeof value === "object" && value !== null
+  const origStr = (typeof value === "object" && value !== null
        ? JSON.stringify(value) : String(value ?? ""));
+  const pending = styleEdits[name] && key in styleEdits[name];
+  input.value = pending ? styleEdits[name][key] : origStr;
+  input.placeholder = STYLE_HINTS[key] || "";
+  const dirty = input.value !== origStr;   // 원래 값과 다를 때만 하이라이트
   input.style.cssText =
     "width:100%;box-sizing:border-box;background:#10151d;border:1px solid " +
-    (pending ? "var(--accent)" : "var(--line)") +
+    (dirty ? "var(--accent)" : "var(--line)") +
     ";color:var(--fg);padding:1px 4px;font:inherit";
   input.oninput = () => {
-    (styleEdits[name] = styleEdits[name] || {})[key] = input.value;
-    input.style.borderColor = "var(--accent)";
+    styleEditSet(name, key, input.value, origStr);
+    input.style.borderColor =
+      input.value !== origStr ? "var(--accent)" : "var(--line)";
     schedulePreview();
   };
   return input;
 }
 
-// drop_shadow(dx=2,dy=2,blur=2.8,color=#000000A0) → 인자별 입력 행으로 펼침
+// drop_shadow(dx=2,dy=2,blur=2.8,color=#000000A0) 파싱 — 전용 4칸 에디터에서 씀
 const SHADOW_RE_JS =
-  /^drop_shadow\(dx=(-?\d+),dy=(-?\d+),blur=([0-9.]+)(?:,color=(#[0-9A-Fa-f]{8}))?\)$/;
+  /^drop_shadow\(dx=(-?\d+),dy=(-?\d+),blur=([0-9.]+)(?:,color=(#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?))?\)$/;
 
-function shadowParamRows(t, name, effectInput) {
-  const m = SHADOW_RE_JS.exec(effectInput.value.trim());
-  if (!m) return;
-  const parts = {dx: m[1], dy: m[2], blur: m[3], color: m[4] || ""};
-  const compose = () => `drop_shadow(dx=${parts.dx},dy=${parts.dy}` +
-    `,blur=${parts.blur}` + (parts.color ? `,color=${parts.color}` : "") + ")";
-  const hints = {dx: "가로 오프셋 px", dy: "세로 오프셋 px",
-                 blur: "번짐 반경", color: "#RRGGBBAA (비우면 검정)"};
-  for (const key of ["dx", "dy", "blur", "color"]) {
-    const tr = el("tr");
-    const label = el("td", "k", "· " + key);
-    label.style.paddingLeft = "16px";
-    tr.appendChild(label);
-    const input = document.createElement("input");
-    input.value = parts[key];
-    input.placeholder = hints[key];
-    input.style.cssText =
-      "width:100%;box-sizing:border-box;background:#10151d;border:1px solid " +
-      "var(--line);color:var(--fg);padding:1px 4px;font:inherit";
-    input.oninput = () => {
-      parts[key] = input.value.trim();
-      const value = compose();
-      effectInput.value = value;
-      effectInput.style.borderColor = "var(--accent)";
-      input.style.borderColor = "var(--accent)";
-      (styleEdits[name] = styleEdits[name] || {}).effect = value;
+// ── 드롭다운 필드 (글꼴·weight·정렬) ────────────────────────────
+const TEXT_ALIGN_OPTIONS = [
+  ["lt", "왼쪽·위 (lt)"],   ["mt", "가운데·위 (mt)"],   ["rt", "오른쪽·위 (rt)"],
+  ["lm", "왼쪽·중앙 (lm)"], ["mm", "가운데·중앙 (mm)"], ["rm", "오른쪽·중앙 (rm)"],
+  ["lb", "왼쪽·아래 (lb)"], ["mb", "가운데·아래 (mb)"], ["rb", "오른쪽·아래 (rb)"],
+];
+
+// styleEdits 에 얹힌 미저장 값이 있으면 그걸, 없으면 원장 값을 준다
+function effStyleVal(name, key, value) {
+  return (styleEdits[name] && key in styleEdits[name])
+    ? styleEdits[name][key] : String(value ?? "");
+}
+
+function styleSelectInput(name, key, value, options, emptyLabel) {
+  const sel = document.createElement("select");
+  const origStr = String(value ?? "");
+  const cur = effStyleVal(name, key, value);
+  const dirty = cur !== origStr;         // 원래 값과 다를 때만 하이라이트
+  sel.style.cssText =
+    "width:100%;box-sizing:border-box;background:#10151d;border:1px solid " +
+    (dirty ? "var(--accent)" : "var(--line)") +
+    ";color:var(--fg);padding:1px 4px;font:inherit";
+  // 첫 옵션은 빈 값(상속/기본) — 라벨 없이 비워 둔다 ("미설정" 같은 표시 안 함)
+  const opts = [["", ""],
+    ...options.map(o => Array.isArray(o) ? o : [o, o])];
+  if (cur && !opts.some(o => o[0] === cur)) opts.push([cur, cur + " (사용자값)"]);
+  for (const [ov, ol] of opts) {
+    const opt = document.createElement("option");
+    opt.value = ov; opt.textContent = ol;
+    if (ov === cur) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  sel.onchange = () => {
+    styleEditSet(name, key, sel.value, origStr);
+    sel.style.borderColor =
+      sel.value !== origStr ? "var(--accent)" : "var(--line)";
+    schedulePreview();
+    if (key === "font_family_ko") renderProps();   // weight 후보 갱신
+  };
+  return sel;
+}
+
+// text_align 3×3 정렬 그리드 — 가로(왼/가운데/오른) × 세로(위/가운데/아래).
+// 값은 [가로 l/m/r][세로 t/m/b] (예: lt = 왼쪽·위).
+const ALIGN_H = [["l", "왼쪽"], ["m", "가운데"], ["r", "오른쪽"]];
+const ALIGN_V = [["t", "위"], ["m", "가운데"], ["b", "아래"]];
+function alignGridInput(name, key, value) {
+  const origStr = String(value ?? "");
+  const cur = effStyleVal(name, key, value);
+  let h = "lmr".includes(cur[0] || "") ? cur[0] : "";
+  let v = "tmb".includes(cur[1] || "") ? cur[1] : "";
+  const wrap = el("div");
+  wrap.style.cssText = "display:inline-grid;grid-template-columns:repeat(3,20px);" +
+    "grid-template-rows:repeat(3,20px);gap:2px;padding:2px;box-sizing:border-box;" +
+    "border:1px solid var(--line)";
+  const cells = {};
+  const repaint = () => {
+    const val = (h && v) ? h + v : "";
+    wrap.style.borderColor = val !== origStr ? "var(--accent)" : "var(--line)";
+    for (const [hh] of ALIGN_H) for (const [vv] of ALIGN_V) {
+      const sel = hh === h && vv === v;
+      const c = cells[hh + vv];
+      c.style.background = sel ? "var(--accent)" : "#10151d";
+      c.firstChild.style.background = sel ? "#0c1420" : "var(--dim)";
+    }
+  };
+  for (const [vv, vn] of ALIGN_V) for (const [hh, hn] of ALIGN_H) {
+    const c = el("div");
+    c.title = hn + "·" + vn + " (" + hh + vv + ")";
+    c.style.cssText = "border:1px solid var(--line);cursor:pointer;display:flex;" +
+      "align-items:" + (vv === "t" ? "flex-start" : vv === "b" ? "flex-end" : "center") +
+      ";justify-content:" + (hh === "l" ? "flex-start" : hh === "r" ? "flex-end" : "center") +
+      ";padding:2px;box-sizing:border-box";
+    const dot = el("div");          // 정렬 위치를 점으로 표시
+    dot.style.cssText = "width:7px;height:3px;background:var(--dim)";
+    c.appendChild(dot);
+    c.onclick = () => {
+      h = hh; v = vv;
+      styleEditSet(name, key, h + v, origStr);
+      repaint();
       schedulePreview();
     };
-    const td = el("td");
-    td.appendChild(input);
-    tr.appendChild(td);
-    t.appendChild(tr);
+    cells[hh + vv] = c;
+    wrap.appendChild(c);
   }
+  repaint();
+  return wrap;
+}
+
+// 키에 따라 드롭다운(글꼴·weight) · 정렬 그리드 · 자유 입력을 고른다
+function styleFieldInput(name, key, value, style) {
+  const fonts = (typeof detail !== "undefined" && detail && detail.fonts) || {};
+  if (key === "font_family_ko")
+    return styleSelectInput(name, key, value, Object.keys(fonts));
+  if (key === "font_weight") {
+    const fam = effStyleVal(name, "font_family_ko", style.font_family_ko);
+    let weights = fonts[fam];
+    if (!weights || !weights.length) {          // 패밀리 미선택 → weight 합집합
+      const all = new Set();
+      for (const ws of Object.values(fonts)) (ws || []).forEach(w => all.add(w));
+      weights = [...all].sort();
+    }
+    return styleSelectInput(name, key, value, weights);
+  }
+  if (key === "text_align")
+    return alignGridInput(name, key, value);
+  if (key === "font_style")
+    return styleSelectInput(name, key, value,
+      [["regular", "regular (보통)"], ["italic", "italic (기울임)"]],
+      "regular (기본)");
+  if (key === "orientation")
+    return styleSelectInput(name, key, value,
+      [["vertical", "세로쓰기 (vertical)"]], "가로 (기본)");
+  return styleValueInput(name, key, value);
 }
 
 function editableStyleTable(name, style) {
   const wrap = el("div");
   const t = el("table");
-  for (const [k, v] of Object.entries(style)) {
-    if (k === "name") continue;
+  const shown = new Set();
+  // effect(=drop_shadow) 전용 행 — dx·dy·blur·color 가로 4칸, 라벨은 박스 안쪽.
+  // 그림자가 아니면(rotate 등) 일반 text 입력으로 되돌린다.
+  const addEffectRow = (origVal) => {
+    const origStr = String(origVal ?? "");
+    const cur = effStyleVal(name, "effect", origVal);
+    const m = SHADOW_RE_JS.exec(cur.trim());
     const tr = el("tr");
-    tr.appendChild(el("td", "k", k));
+    const kd = el("td", "k", m ? "drop_shadow" : "effect");
+    if (!("effect" in style)) kd.style.color = "var(--dim)";
+    tr.appendChild(kd);
     const td = el("td");
-    const input = styleValueInput(name, k, v);
+    if (!m) {                       // 그림자 아님 → 일반 text
+      td.appendChild(styleValueInput(name, "effect", origVal));
+      tr.appendChild(td); t.appendChild(tr);
+      return;
+    }
+    const parts = {dx: m[1], dy: m[2], blur: m[3], color: m[4] || ""};
+    const compose = () =>
+      `drop_shadow(dx=${parts.dx || 0},dy=${parts.dy || 0},` +
+      `blur=${parts.blur || 0}` +
+      (parts.color ? `,color=${parts.color}` : "") + ")";
+    const row = el("div");
+    row.style.cssText = "display:flex;gap:3px";
+    const boxes = [];
+    const paint = (d) => boxes.forEach(b =>
+      b.style.borderColor = d ? "var(--accent)" : "var(--line)");
+    const mkField = (key, label, ph, grow) => {
+      const box = el("div");
+      box.style.cssText = "flex:" + (grow || 1) + " 1 0;min-width:0;display:flex;" +
+        "align-items:center;gap:3px;background:#10151d;" +
+        "border:1px solid var(--line);padding:1px 4px;box-sizing:border-box";
+      const lb = el("span", "", label);
+      lb.style.cssText = "color:var(--dim);font-size:11px;flex:none";
+      const inp = document.createElement("input");
+      inp.value = parts[key];
+      inp.placeholder = ph || "";
+      inp.style.cssText = "flex:1;min-width:0;width:100%;background:none;" +
+        "border:none;color:var(--fg);font:inherit;padding:0;outline:none";
+      inp.oninput = () => {
+        parts[key] = inp.value.trim();
+        const val = compose();
+        styleEditSet(name, "effect", val, origStr);
+        paint(val !== origStr);
+        schedulePreview();
+      };
+      box.appendChild(lb); box.appendChild(inp);
+      boxes.push(box);
+      return box;
+    };
+    // dx·dy·blur 는 짧은 숫자라 좁게, color 는 #RRGGBB(AA) 라 넓게
+    row.appendChild(mkField("dx", "dx", "0", 1));
+    row.appendChild(mkField("dy", "dy", "0", 1));
+    row.appendChild(mkField("blur", "blur", "0", 1.2));
+    row.appendChild(mkField("color", "color", "#RRGGBB", 3));
+    paint(cur.trim() !== origStr.trim());
+    td.appendChild(row);
+    tr.appendChild(td);
+    t.appendChild(tr);
+  };
+  const addRow = (k, v) => {
+    if (k === "effect") { addEffectRow(v); shown.add(k); return; }
+    const tr = el("tr");
+    const kd = el("td", "k", k);
+    if (!(k in style)) kd.style.color = "var(--dim)";   // 아직 미설정 필드
+    // 설정된 키엔 삭제(×) — 지우면 상속값/기본으로 복귀. 그리드처럼 클리어가
+    // 없는 필드도 이걸로 지운다.
+    const isSet = (k in style) ||
+      (styleEdits[name] && k in styleEdits[name]) ||
+      (styleExtraKeys[name] || []).includes(k);
+    if (isSet) {
+      const del = el("span", "", " ×");
+      del.title = "이 키 삭제 (상속값/기본으로 복귀)";
+      del.style.cssText = "cursor:pointer;color:var(--dim);font-weight:bold";
+      del.onmouseenter = () => del.style.color = "#ff5340";
+      del.onmouseleave = () => del.style.color = "var(--dim)";
+      del.onclick = () => {
+        if (k in style) (styleEdits[name] = styleEdits[name] || {})[k] = "";
+        else {
+          if (styleEdits[name]) delete styleEdits[name][k];
+          if (styleExtraKeys[name])
+            styleExtraKeys[name] = styleExtraKeys[name].filter(x => x !== k);
+        }
+        renderProps();
+      };
+      kd.appendChild(del);
+    }
+    tr.appendChild(kd);
+    const td = el("td");
+    const input = styleFieldInput(name, k, v, style);
     td.appendChild(input);
     tr.appendChild(td);
     t.appendChild(tr);
-    if (k === "effect") shadowParamRows(t, name, input);
-  }
-  // 새 키 추가 행 — 키 입력 후 값을 바꾸면 편집에 얹힌다
-  const tr = el("tr");
-  const keyInput = document.createElement("input");
-  keyInput.placeholder = "+키";
-  keyInput.style.cssText = "width:100%;box-sizing:border-box;background:none;" +
-    "border:1px dashed var(--line);color:var(--dim);padding:1px 4px;font:inherit";
-  const valInput = document.createElement("input");
-  valInput.style.cssText = keyInput.style.cssText;
-  valInput.oninput = () => {
-    const key = keyInput.value.trim();
-    if (!key) return;
-    (styleEdits[name] = styleEdits[name] || {})[key] = valInput.value;
-    schedulePreview();
+    shown.add(k);
   };
-  const td1 = el("td", "k"); td1.appendChild(keyInput);
-  const td2 = el("td"); td2.appendChild(valInput);
-  tr.appendChild(td1); tr.appendChild(td2);
-  t.appendChild(tr);
+  for (const [k, v] of Object.entries(style)) {
+    if (k === "name") continue;
+    addRow(k, v);
+  }
+  // 기본 필드는 base 가 없는 스타일에서만 채워 보여준다 — 새 스타일을 바로
+  // 채우게. base 로 상속받는 스타일은 부모에서 오므로 강제로 안 띄운다.
+  if (!style.base) {
+    for (const [k] of BASIC_STYLE_FIELDS) {
+      if (!shown.has(k)) addRow(k, style[k] ?? "");
+    }
+  }
+  // 드롭다운으로 드러낸 선택 키 + 미저장 편집이 얹힌 키도 계속 보여준다
+  for (const k of (styleExtraKeys[name] || [])) {
+    if (!shown.has(k)) addRow(k, style[k] ?? "");
+  }
+  for (const k of Object.keys(styleEdits[name] || {})) {
+    if (!shown.has(k)) addRow(k, style[k] ?? "");
+  }
+  // ＋키 추가 — 아직 안 보이는 '알려진' 스타일 항목만 드롭다운으로 고른다
+  const addable = ALL_STYLE_FIELDS.map(([k]) => k).filter(k => !shown.has(k));
+  if (addable.length) {
+    const tr = el("tr");
+    const kd = el("td", "k", "＋키 추가"); kd.style.color = "var(--dim)";
+    tr.appendChild(kd);
+    const td = el("td");
+    const sel = document.createElement("select");
+    sel.style.cssText = "width:100%;box-sizing:border-box;background:none;" +
+      "border:1px dashed var(--line);color:var(--dim);padding:1px 4px;font:inherit";
+    const ph = document.createElement("option");
+    ph.value = ""; ph.textContent = "— 추가할 항목 —";
+    sel.appendChild(ph);
+    for (const k of addable) {
+      const o = document.createElement("option");
+      o.value = k;
+      o.textContent = STYLE_HINTS[k] ? `${k} — ${STYLE_HINTS[k]}` : k;
+      sel.appendChild(o);
+    }
+    sel.onchange = () => {
+      const k = sel.value;
+      if (!k) return;
+      if (k in STYLE_KEY_PRESETS) {                 // effect 등: 프리셋 값으로
+        (styleEdits[name] = styleEdits[name] || {})[k] = STYLE_KEY_PRESETS[k];
+      } else {                                      // 그 외: 빈 행만 드러낸다
+        styleExtraKeys[name] = styleExtraKeys[name] || [];
+        if (!styleExtraKeys[name].includes(k)) styleExtraKeys[name].push(k);
+      }
+      schedulePreview();
+      renderProps();
+    };
+    td.appendChild(sel);
+    tr.appendChild(td);
+    t.appendChild(tr);
+  }
   wrap.appendChild(t);
 
   const dirty = !!(styleEdits[name] && Object.keys(styleEdits[name]).length);
@@ -566,20 +901,27 @@ function editableStyleTable(name, style) {
     busy("스타일 저장 중…");
     const result = await postOp("/api/style/update?path=" +
       encodeURIComponent(detail.file), {name, updates});
-    if (result.ok) delete styleEdits[name];
+    if (result.ok) { delete styleEdits[name]; delete styleExtraKeys[name]; }
     finishOp(result, selected);
   }, dirty);
   save.style.marginTop = "4px";
   wrap.appendChild(save);
+  const canRevert = dirty || !!(styleExtraKeys[name] || []).length;
   const revert = toolButton("↩ 되돌리기", () => {
-    // 저장 안 한 편집 폐기 — 원장의 현재 값으로 입력·미리보기 복귀
-    if (!styleEdits[name]) return;
+    // 저장 안 한 편집·드러낸 키 폐기 — 원장의 현재 값으로 복귀
     delete styleEdits[name];
+    delete styleExtraKeys[name];
     renderStage();
     renderProps();
-  }, dirty);
+  }, canRevert);
   revert.style.marginTop = "4px";
   wrap.appendChild(revert);
+  // 입력이 바뀔 때마다 저장/되돌리기 하이라이트를 다시 칠한다 (재렌더 없이)
+  styleDirtyRefreshers[name] = () => {
+    const d = !!(styleEdits[name] && Object.keys(styleEdits[name]).length);
+    setToolActive(save, d);
+    setToolActive(revert, d || !!(styleExtraKeys[name] || []).length);
+  };
   return wrap;
 }
 
@@ -662,8 +1004,9 @@ async function postOp(url, body) {
 
 async function finishOp(result, keepSelected) {
   const file = detail.file;
+  const group = currentGroup;
   editMode = null;
-  await openFile(file, null);           // openFile 이 selected 를 초기화한다
+  await openFile(file, null, group);    // 그룹 컨텍스트 유지 (공유 base)
   if (keepSelected) {
     selected = keepSelected;
     renderStage();
@@ -873,7 +1216,150 @@ function renderProps() {
       {style: sel.value}), id);
   };
   styleRow.appendChild(sel);
+  // ＋ 새 스타일 추가
+  const addStyleBtn = el("button", "", "＋새 스타일");
+  addStyleBtn.style.cssText = "background:none;border:1px solid var(--line);" +
+    "color:var(--dim);padding:2px 8px;cursor:pointer;white-space:nowrap";
+  addStyleBtn.onclick = () => {
+    addStyleBtn.style.display = "none";
+    const form = el("div");
+    form.style.cssText = "display:flex;gap:4px;align-items:center;flex-wrap:" +
+      "wrap;margin:4px 0";
+    const nameIn = document.createElement("input");
+    nameIn.placeholder = "새 스타일 이름";
+    nameIn.style.cssText = "background:#10151d;border:1px solid var(--line);" +
+      "color:var(--fg);padding:2px 4px;font:inherit;width:120px";
+    const baseSel = document.createElement("select");
+    baseSel.style.cssText = "background:#10151d;border:1px solid var(--line);" +
+      "color:var(--fg);padding:2px 4px;font:inherit";
+    const none = document.createElement("option");
+    none.value = ""; none.textContent = "상속 없음";
+    baseSel.appendChild(none);
+    for (const n of Object.keys(detail.styles).sort()) {
+      const o = document.createElement("option");
+      o.value = n; o.textContent = "↳ " + n;
+      baseSel.appendChild(o);
+    }
+    const addOk = el("button", "", "추가");
+    addOk.style.cssText = "background:none;border:1px solid var(--accent);" +
+      "color:var(--fg);padding:2px 8px;cursor:pointer";
+    const addCancel = el("button", "", "취소");
+    addCancel.style.cssText = "background:none;border:1px solid var(--line);" +
+      "color:var(--dim);padding:2px 8px;cursor:pointer";
+    const close = () => { form.remove(); addStyleBtn.style.display = ""; };
+    addCancel.onclick = close;
+    addOk.onclick = async () => {
+      const name = nameIn.value.trim();
+      if (!name) { nameIn.focus(); return; }
+      busy("스타일 추가 중…");
+      const res = await postOp("/api/style/add", {name, base: baseSel.value});
+      // 추가한 스타일을 지금 선택된 상자에 바로 지정 (선택돼 있으면)
+      if (res.ok && selected)
+        await postOp("/api/box/style?path=" + encodeURIComponent(detail.file) +
+          "&id=" + encodeURIComponent(selected), {style: name});
+      finishOp(res, selected);
+    };
+    nameIn.onkeydown = (e) => {
+      if (e.key === "Enter") addOk.onclick();
+      else if (e.key === "Escape") close();
+    };
+    form.appendChild(nameIn);
+    form.appendChild(el("span", "k", "상속"));
+    form.appendChild(baseSel);
+    form.appendChild(addOk);
+    form.appendChild(addCancel);
+    styleRow.insertAdjacentElement("afterend", form);
+    nameIn.focus();
+  };
+  styleRow.appendChild(addStyleBtn);
   pane.appendChild(styleRow);
+
+  // 원문(jp)·번역문(ko) 표시 + ✏️ 편집 버튼으로 둘 다 편집 (원문도 정정 가능)
+  {
+    const koWrap = el("div");
+    koWrap.style.cssText = "margin:2px 0 10px";
+    const rawRow = detail.raw[selected];
+    const koVal = (isCatalogRow ? (detail.entry && detail.entry.ko)
+                                : (rawRow && rawRow.ko)) || "";
+    const jpVal = (rawRow && rawRow.jp) || row.jp_text || "";
+
+    // 표시부 — 원문 / 번역문 (값 없으면 흐리게 "(없음)")
+    const dispLine = (label, val) => {
+      const d = el("div");
+      d.style.cssText = "display:flex;gap:8px;margin:1px 0";
+      const k = el("span", "k", label);
+      k.style.cssText = "flex:none;min-width:48px";
+      const v = el("span", "", val || "(없음)");
+      v.style.whiteSpace = "pre-line";   // 두 줄 번역문의 줄바꿈이 보이게
+      if (!val) v.style.color = "var(--dim)";
+      d.appendChild(k); d.appendChild(v);
+      return d;
+    };
+    koWrap.appendChild(dispLine("원문", jpVal));
+    koWrap.appendChild(dispLine("번역문", koVal));
+
+    // 편집창 (기본 숨김) — 원문 jp + 번역문 ko 각각 textarea
+    const editor = el("div");
+    editor.style.cssText = "display:none;margin-top:4px";
+    const mkField = (label, val) => {
+      const w = el("div"); w.style.marginBottom = "5px";
+      w.appendChild(el("span", "k", label));
+      const t = document.createElement("textarea");
+      t.style.cssText = "width:100%;min-height:38px;background:#10151d;border:" +
+        "1px solid var(--line);color:var(--fg);padding:4px;font:inherit;" +
+        "box-sizing:border-box;resize:vertical;margin-top:2px";
+      t.value = val;
+      w.appendChild(t);
+      return [w, t];
+    };
+    const [jpW, jpTa] = mkField("원문 jp", jpVal);
+    const [koW, ta] = mkField("번역문 ko", koVal);
+    const saveBtn = el("button", "", "💾 저장 (Ctrl+Enter)");
+    saveBtn.style.cssText = "margin:2px 6px 0 0;background:none;border:1px solid " +
+      "var(--line);color:var(--fg);padding:2px 10px;cursor:pointer";
+    const doSave = async () => {
+      const id = selected, f = encodeURIComponent(detail.file);
+      busy("저장 중…");
+      let res = null;
+      if (jpTa.value !== jpVal)
+        res = await postOp("/api/box/jp?path=" + f + "&id=" +
+          encodeURIComponent(id), {jp: jpTa.value});
+      if (ta.value !== koVal)
+        res = await postOp("/api/box/ko?path=" + f + "&id=" +
+          encodeURIComponent(id), {ko: ta.value});
+      finishOp(res || {ok: true, log: "변경 없음"}, id);
+    };
+    saveBtn.onclick = doSave;
+    const onKey = (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault(); doSave();
+      }
+    };
+    const dirty = () => setToolActive(saveBtn,
+      jpTa.value !== jpVal || ta.value !== koVal);
+    jpTa.onkeydown = onKey; ta.onkeydown = onKey;
+    jpTa.oninput = dirty;   ta.oninput = dirty;
+    const editBtn = el("button", "", jpVal || koVal ? "✏️ 편집" : "✏️ 입력");
+    editBtn.style.cssText = "margin-top:3px;background:none;border:1px solid " +
+      "var(--line);color:var(--fg);padding:2px 10px;cursor:pointer";
+    const cancel = el("button", "", "취소");
+    cancel.style.cssText = saveBtn.style.cssText;
+    cancel.onclick = () => {
+      jpTa.value = jpVal; ta.value = koVal; setToolActive(saveBtn, false);
+      editor.style.display = "none"; editBtn.style.display = "";
+    };
+    editBtn.onclick = () => {
+      editBtn.style.display = "none"; editor.style.display = "";
+      ta.focus();
+    };
+    editor.appendChild(jpW);
+    editor.appendChild(koW);
+    editor.appendChild(saveBtn);
+    editor.appendChild(cancel);
+    koWrap.appendChild(editBtn);
+    koWrap.appendChild(editor);
+    pane.appendChild(koWrap);
+  }
 
   // ① inline — 일반 행이면 구조형 행, text-only 항목이면 entry
   pane.appendChild(el("h3", "", "Inline — " + selected));
@@ -965,6 +1451,33 @@ function addHandles(div, key, rect, id) {
     };
     div.appendChild(h);
   }
+  // 틸트(회전) 핸들 — text 상자 상단 중앙 위로 나온 원. 드래그로 기울인다.
+  if (key === "text") {
+    const rot = el("div", "handle rot");
+    rot.title = "드래그: 틸트(회전) · 더블클릭: 0°";
+    rot.style.cursor = "grab";
+    rot.style.left = "calc(50% - 5px)";
+    rot.style.top = "-20px";
+    rot.style.borderRadius = "50%";
+    rot.onmousedown = ev => {
+      ev.stopPropagation();
+      ev.preventDefault();
+      const b = div.getBoundingClientRect();
+      const cx = b.left + b.width / 2, cy = b.top + b.height / 2;
+      const startA = Math.atan2(ev.clientY - cy, ev.clientX - cx) * 180 / Math.PI;
+      const cur = (detail.raw[id] && detail.raw[id].angle) || 0;
+      resizing = {id, key, handle: "rotate", start: [ev.clientX, ev.clientY],
+                  center: [cx, cy], startA, origAngle: cur, cur: null, div};
+    };
+    rot.ondblclick = async ev => {          // 더블클릭 = 각도 0 으로
+      ev.stopPropagation();
+      busy("틸트 초기화…");
+      finishOp(await postOp("/api/box/angle?path=" +
+        encodeURIComponent(detail.file) + "&id=" + encodeURIComponent(id),
+        {angle: 0}), id);
+    };
+    div.appendChild(rot);
+  }
   div.style.cursor = "move";            // 본체 드래그 = 이동
   div.onmousedown = ev => {
     if (ev.target !== div) return;
@@ -977,6 +1490,15 @@ function addHandles(div, key, rect, id) {
 
 window.addEventListener("mousemove", ev => {
   if (!resizing) return;
+  if (resizing.handle === "rotate") {       // 틸트 드래그
+    const [cx, cy] = resizing.center;
+    const a = Math.atan2(ev.clientY - cy, ev.clientX - cx) * 180 / Math.PI;
+    const newA = resizing.origAngle - (a - resizing.startA);
+    resizing.cur = Math.round(newA * 10) / 10;
+    resizing.div.style.transformOrigin = "center";
+    resizing.div.style.transform = "rotate(" + (-resizing.cur) + "deg)";
+    return;
+  }
   const s = pxScale();
   const dx = Math.round((ev.clientX - resizing.start[0]) / s);
   const dy = Math.round((ev.clientY - resizing.start[1]) / s);
@@ -1002,11 +1524,19 @@ window.addEventListener("mouseup", async () => {
   if (!resizing) return;
   const r = resizing;
   resizing = null;
+  if (r.handle === "rotate") {              // 틸트 저장
+    if (r.cur === null || r.cur === r.origAngle) return;
+    busy("틸트 저장 중…");
+    finishOp(await postOp("/api/box/angle?path=" +
+      encodeURIComponent(detail.file) + "&id=" + encodeURIComponent(r.id),
+      {angle: r.cur}), r.id);
+    return;
+  }
   if (!r.cur || String(r.cur) === String(r.orig)) return;
   busy("상자 저장 중…");
   const res = await postOp("/api/box/update?path=" +
     encodeURIComponent(detail.file) + "&id=" + encodeURIComponent(r.id),
-    {key: r.key, rect: r.cur});
+    {key: r.key, rect: r.cur, sync: syncBoxes});
   // source(원문 영역)를 고쳤으면 그 박스만 자동 재판독 — 변경분만 업데이트
   if (res.ok && r.key === "source") {
     const rr = await postOp("/api/box/reread?path=" +
@@ -1091,7 +1621,8 @@ window.addEventListener("mouseup", ev => {
   dragStart = null;
   if (rect[2] < 3 || rect[3] < 3) return;      // 너무 작으면 취소
   busy("상자 추가 중… (원문 판독 포함)");
-  postOp("/api/box/add?path=" + encodeURIComponent(detail.file), {rect})
+  postOp("/api/box/add?path=" + encodeURIComponent(detail.file),
+         {rect, sync: syncBoxes})
     .then(finishOp);
 });
 
