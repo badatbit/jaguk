@@ -209,6 +209,7 @@ def flatten_row(r: dict) -> dict:
         "overflow": _s(r.get("overflow")),
         "catalog": _s(r.get("catalog")),
         "slot": _s(r.get("slot")),
+        "angle": _s(r.get("angle")),
     }
 
 
@@ -289,6 +290,40 @@ def rule_mode(rule: dict) -> str:
     """규칙 mode (구 이름 image-only 는 text-only 로 정규화)."""
     mode = rule.get("mode", "auto")
     return "text-only" if mode == "image-only" else mode
+
+
+def overlay_groups(data: dict) -> list[tuple[str, str, list[str]]]:
+    """mode=overlay 규칙을 (그룹명, base_rel, [member_rel…]) 로.
+
+    그룹은 **논리적**이다 — base·members 는 실제 아카이브 상대 경로
+    (예: SOZ/soz_011_00.png)를 그대로 가리킨다. 물리 폴더에 의존하지 않는다.
+    """
+    out = []
+    for name, rule in (data.get("rules") or {}).items():
+        if rule_mode(rule) != "overlay":
+            continue
+        base = (rule.get("base") or "").replace("\\", "/")
+        members = [str(m).replace("\\", "/") for m in (rule.get("members") or [])]
+        out.append((name, base, members))
+    return out
+
+
+def overlay_group_for(data: dict, relative: str, prefer: str | None = None):
+    """relative(아카이브 경로)이 속한 overlay 그룹 (그룹명, base, members).
+
+    base 파일은 여러 그룹이 공유할 수 있다 — prefer(그룹명)가 그 파일을 포함하면
+    그 그룹을 우선하고, 아니면 처음 매칭되는 그룹을 준다. 없으면 None.
+    """
+    relative = (relative or "").replace("\\", "/")
+    groups = overlay_groups(data)
+    if prefer:
+        for name, base, members in groups:
+            if name == prefer and (relative == base or relative in members):
+                return name, base, members
+    for name, base, members in groups:
+        if relative == base or relative in members:
+            return name, base, members
+    return None
 
 
 # ---- terms (전역 번역 용어표) ------------------------------------------------

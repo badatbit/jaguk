@@ -321,7 +321,10 @@ def resolve_rule_key(project: Project, target: str) -> str:
 
 def cmd_set(args) -> int:
     project = load_project(args.config)
-    key = resolve_rule_key(project, args.target)
+    # 논리 overlay 그룹: target 은 그룹 이름(경로 아님), base/member 는 실제
+    # 아카이브 경로. 물리 폴더가 없어도 되도록 resolve_rule_key 를 건너뛴다.
+    logical_overlay = bool(args.overlay and args.member)
+    key = args.target if logical_overlay else resolve_rule_key(project, args.target)
     data = ledgermod.load(project)
     rules = data.setdefault("rules", {})
 
@@ -336,6 +339,12 @@ def cmd_set(args) -> int:
     rule = rules.get(key, {})
     if args.ignore:
         rule = {"mode": "ignore"}
+    elif args.overlay:
+        rule["mode"] = "overlay"
+        if args.base:
+            rule["base"] = args.base.replace("\\", "/")
+        if args.member:      # 논리 멤버 목록 (실제 아카이브 경로)
+            rule["members"] = [m.replace("\\", "/") for m in args.member]
     elif args.text_only:
         rule["mode"] = "text-only"
     elif args.row:
@@ -658,6 +667,98 @@ def seed_rows_mode(data: dict, entry: dict, rule: dict) -> tuple[int, int]:
     return added, skipped
 
 
+def detect_marker_boxes(image_path, marker: dict) -> list[list[int]]:
+    """이미지에서 마커색 테두리 사각형을 찾아 crop-box [x,y,w,h] 리스트로.
+
+    marker = {"color":[r,g,b], "tolerance":t, "inset":n}. 테두리 색선과 inset
+    만큼 안쪽을 crop 으로 잡는다 (색선 자체는 crop 밖). 오버레이 한 장에
+    마커 하나가 기본이라 색 픽셀 전체의 bbox 를 쓰되, 여러 개면 연결요소로
+    나눈다(scipy 있으면).
+    """
+    import numpy as np
+    from PIL import Image
+    color = tuple(marker.get("color") or [0, 255, 0])
+    tol = int(marker.get("tolerance", 40))
+    inset = int(marker.get("inset", 1))
+    a = np.asarray(Image.open(image_path).convert("RGB"), dtype=int)
+    r, g, b = color
+    mask = ((np.abs(a[:, :, 0] - r) <= tol) & (np.abs(a[:, :, 1] - g) <= tol)
+            & (np.abs(a[:, :, 2] - b) <= tol))
+    if not mask.any():
+        return []
+    try:
+        from scipy import ndimage
+        lab, n = ndimage.label(mask)
+        comps = range(1, n + 1)
+        get = lambda i: np.where(lab == i)
+    except Exception:
+        comps = [None]
+        get = lambda _: np.where(mask)
+    boxes = []
+    for i in comps:
+        ys, xs = get(i)
+        x0, y0, x1, y1 = int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+        if (x1 - x0) < 6 or (y1 - y0) < 6:      # 테두리 아닌 잡티 제외
+            continue
+        cx, cy = x0 + 1 + inset, y0 + 1 + inset
+        cw, ch = (x1 - 1 - inset) - cx + 1, (y1 - 1 - inset) - cy + 1
+        if cw > 0 and ch > 0:
+            boxes.append([cx, cy, cw, ch])
+    return sorted(boxes, key=lambda bx: (bx[1], bx[0]))
+
+
+def _text_in_box(lines: list[dict], box: list[int], joiner: str) -> str:
+    """crop-box 안(중심이 들어오는) OCR 줄들의 원문을 이어 붙인다."""
+    x, y, w, h = box
+    inside = [ln for ln in lines
+              if x <= ln["x"] + ln["w"] / 2 <= x + w
+              and y <= ln["y"] + ln["h"] / 2 <= y + h]
+    inside.sort(key=lambda ln: (ln["y"], ln["x"]))
+    return joiner.join((ln.get("text") or "").strip() for ln in inside).strip()
+
+
+def seed_overlay_mode(data: dict, entry: dict, project, rule: dict) -> tuple[int, int]:
+    """--overlay 씨앗 — 오버레이 파일의 마커 상자를 crop-box 로 잡고, 그 안의
+    OCR 원문을 jp 로 한 행을 만든다 (box 는 마커에서, 글자는 OCR 에서).
+    """
+    marker = getattr(project, "crop_marker", None) or {}
+    if not marker:
+        return 0, 0
+    relative = entry["file"]
+    path = project.original_root / Path(*relative.split("/"))
+    boxes = detect_marker_boxes(path, marker)
+    if not boxes:
+        return 0, 0
+    joiner = "" if (project.ocr_lang or "").lower().startswith(("ja", "zh")) else " "
+    rows = ledgermod.rows(data)
+    existing_ids = {r.get("box_id") for r in rows}
+    existing_crops = {(r.get("file"), tuple(ledgermod.crop_rect(r)))
+                      for r in rows if r.get("crop")}
+    prefix = ocrmod._id_prefix(relative)
+    counter = added = skipped = 0
+    for box in boxes:
+        if (relative, tuple(box)) in existing_crops:
+            skipped += 1
+            continue
+        jp = _text_in_box(entry["lines"], box, joiner)
+        counter += 1
+        box_id = f"{prefix}m{counter}"
+        while box_id in existing_ids:
+            counter += 1
+            box_id = f"{prefix}m{counter}"
+        existing_ids.add(box_id)
+        existing_crops.add((relative, tuple(box)))
+        rows.append({
+            "box_id": box_id, "file": relative, "element_id": None,
+            "run_id": None, "jp": jp, "ko": "", "ocr_id": None,
+            "crop": list(box), "text": list(box), "source": list(box),
+            "canvas": None, "pad": None, "style": rule.get("style", ""),
+            "opacity": "FF", "status": "todo", "notes": "jaguk extract (overlay)",
+        })
+        added += 1
+    return added, skipped
+
+
 def seed_text_only(data: dict, entry: dict, rule_path: str, rule: dict,
                     lang: str) -> tuple[int, int]:
     """--text-only 규칙 씨앗 — text-only 항목으로 (base 파일 불필요)."""
@@ -729,12 +830,19 @@ def run_extract(project: Project, only: str = "", backend: str = "") -> int:
               "원본 트리를 직접 두세요 (scan/copy 는 비활성).")
         return 1
 
-    counts = {"auto": 0, "text-only": 0, "rows": 0, "ignore": 0}
+    counts = {"auto": 0, "text-only": 0, "rows": 0, "overlay": 0, "ignore": 0}
     plan: list[tuple[str, str, dict, str]] = []   # (rel, rule_path, rule, mode)
     for path in targets:
         relative = path.relative_to(project.original_root).as_posix()
-        rule_path, rule = match_rule(rules, relative)
-        mode = ledgermod.rule_mode(rule)
+        # overlay 그룹은 논리적 — base/member 소속을 접두 규칙보다 먼저 본다
+        grp = ledgermod.overlay_group_for(data, relative)
+        if grp:
+            rule_path = grp[0]
+            rule = rules.get(rule_path, {})
+            mode = "overlay"
+        else:
+            rule_path, rule = match_rule(rules, relative)
+            mode = ledgermod.rule_mode(rule)
         counts[mode] = counts.get(mode, 0) + 1
         if mode == "ignore":
             continue
@@ -787,12 +895,16 @@ def run_extract(project: Project, only: str = "", backend: str = "") -> int:
     auto_entries = []
     for relative, rule_path, rule, mode in plan:
         entry = by_rel.get(relative)
-        if entry is None or not entry["lines"]:
+        # overlay 는 마커 상자로 씨앗하므로 OCR 이 글자를 못 찾아도(빈 lines)
+        # 행을 만든다 — jp 만 빈 채로. 나머지 모드는 글자 없으면 건너뛴다.
+        if entry is None or (not entry["lines"] and mode != "overlay"):
             continue
         if mode == "text-only":
             a, s = seed_text_only(data, entry, rule_path, rule, project.ocr_lang)
         elif mode == "rows":
             a, s = seed_rows_mode(data, entry, rule)
+        elif mode == "overlay":
+            a, s = seed_overlay_mode(data, entry, project, rule)  # base=마커없음→0
         else:
             auto_entries.append(entry)
             continue
@@ -804,7 +916,8 @@ def run_extract(project: Project, only: str = "", backend: str = "") -> int:
     if added:
         ledgermod.save(project, data)
     print(f"처리: auto {counts['auto']}장 / text-only {counts['text-only']}장 / "
-          f"rows {counts['rows']}장 / ignore {counts['ignore']}장 (OCR 제외)")
+          f"rows {counts['rows']}장 / overlay {counts['overlay']}장 / "
+          f"ignore {counts['ignore']}장 (OCR 제외)")
     print(f"원장 기록 {added}건 추가, 기존 {skipped}건 유지 -> {project.ledger_path}")
     return 0
 
@@ -951,6 +1064,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--multicolumn", action="store_true",
                    help="한 줄에 여러 항목 — 열별로 ref-replace 짝짓기")
     p.add_argument("--ignore", action="store_true", help="처리 제외")
+    p.add_argument("--overlay", action="store_true",
+                   help="base + 오버레이 묶음 (논리 그룹). --member 로 실제 "
+                        "아카이브 경로를 나열하면 target 은 그룹 이름이 된다. "
+                        "각 오버레이의 마커 상자(config crop_marker)를 crop-box 로")
+    p.add_argument("--base", default="",
+                   help="--overlay 의 베이스 이미지 (originals 기준 경로, "
+                        "예: SOZ/soz_011_00.png). 지운 배경 = 이 파일")
+    p.add_argument("--member", action="append", default=[], metavar="REL",
+                   help="--overlay 그룹의 멤버 (originals 기준 경로). 반복 지정. "
+                        "주면 그룹이 논리적이 되어 물리 폴더가 필요 없다")
     p.add_argument("--dict", default="", help="이 무리의 번역 용어표 파일")
     p.add_argument("--style", default="", help="적용할 스타일 이름")
     p.add_argument("--apply", action="store_true",

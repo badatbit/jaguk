@@ -65,6 +65,10 @@ DEFAULTS = {
     "ocr_recognizer": "",
     "fonts": {},
     "supersample": 4,
+    # overlay 규칙에서 crop-box 를 잡는 마커 상자의 색·판정. 이미지에 그려진
+    # 그 색 테두리 사각형의 안쪽(테두리 + inset 만큼 들여쓴)을 crop 으로 쓴다.
+    # 하드코딩하지 않고 여기서 바꾼다 (예: 녹색 [0,255,0], inset 1).
+    "crop_marker": {"color": [0, 255, 0], "tolerance": 40, "inset": 1},
 }
 
 
@@ -87,6 +91,7 @@ class Project:
     ocr_recognizer: str
     fonts: dict[str, str]
     supersample: int = 4
+    crop_marker: dict | None = None
 
 
 def find_config(start: Path | None = None) -> Path | None:
@@ -154,6 +159,7 @@ def load_path(config_path: Path) -> Project:
         ocr_recognizer=raw["ocr_recognizer"],
         fonts=dict(raw["fonts"]),
         supersample=max(1, int(raw["supersample"])),
+        crop_marker=dict(raw.get("crop_marker") or {}),
     )
 
 
