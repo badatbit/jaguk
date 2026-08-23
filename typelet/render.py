@@ -59,7 +59,7 @@ ITALIC_SLANT = 0.2
 
 SHADOW_RE = re.compile(
     r"drop_shadow\(dx=(-?\d+),dy=(-?\d+),blur=([0-9.]+)"
-    r"(?:,color=(#[0-9A-Fa-f]{8}))?\)"
+    r"(?:,color=(#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?))?\)"   # #RRGGBB 또는 RRGGBBAA
 )
 ROTATE_RE = re.compile(r"rotate\(angle=(-?[0-9.]+)\)")
 
@@ -105,6 +105,8 @@ class RowSpec:
     base: str = ""                          # "blank" = base 파일 없이 투명 캔버스
     overflow: str = ""                      # "squeeze" = 넘치면 가로만 압축
     squeeze_min: float = 0.0                # squeeze 하한 — 그 이상은 넘치게 둔다
+    line_height: float = 0.0                # 세로쓰기 글자 피치 = size×배수 (0=기본)
+    angle: float = 0.0                      # 상자별 틸트(회전) 각도 (도, 반시계+)
 
 
 def parse_box(row: dict[str, str], prefix: str, box_id: str,
@@ -124,15 +126,22 @@ def parse_box(row: dict[str, str], prefix: str, box_id: str,
 def parse_color(value: str, alpha: int, field: str, box_id: str
                 ) -> tuple[int, int, int, int]:
     value = value.strip()
+    if re.fullmatch(r"#[0-9A-Fa-f]{8}", value):   # #RRGGBBAA — 글자 알파
+        r, g, b, a = (int(value[i:i + 2], 16) for i in (1, 3, 5, 7))
+        return r, g, b, a * alpha // 255          # 색 알파 × 행 opacity
     if not re.fullmatch(r"#[0-9A-Fa-f]{6}", value):
-        raise ValueError(f"{box_id}: {field}는 #RRGGBB 형식이어야 합니다: {value!r}")
+        raise ValueError(
+            f"{box_id}: {field}는 #RRGGBB 또는 #RRGGBBAA 형식이어야 합니다: {value!r}")
     r, g, b = (int(value[i:i + 2], 16) for i in (1, 3, 5))
     return r, g, b, alpha
 
 
 def parse_rgba8(value: str, box_id: str) -> tuple[int, int, int, int]:
+    value = value.strip()
+    if re.fullmatch(r"#[0-9A-Fa-f]{6}", value):
+        value = value + "FF"      # 알파 생략 = 불투명
     if not re.fullmatch(r"#[0-9A-Fa-f]{8}", value):
-        raise ValueError(f"{box_id}: #RRGGBBAA 형식이 아닙니다: {value!r}")
+        raise ValueError(f"{box_id}: #RRGGBB(AA) 형식이 아닙니다: {value!r}")
     return tuple(int(value[i:i + 2], 16) for i in range(1, 9, 2))
 
 
@@ -158,6 +167,26 @@ def select_rows(flat_rows: list[dict], statuses: set[str], only: str
     ]
 
 
+def merge_style(style_name: str, styles: dict[str, dict],
+                _seen: set | None = None) -> dict:
+    """base 사슬을 따라 병합한 스타일 — 부모를 깔고 자식이 덮는다.
+
+    map_label1{base:map_label} 처럼 자식이 required 필드를 안 가져도 base 에서
+    상속받아 동작한다. 순환은 _seen 으로 끊는다.
+    """
+    _seen = _seen or set()
+    if not style_name or style_name in _seen or style_name not in styles:
+        return {}
+    _seen.add(style_name)
+    style = styles[style_name]
+    merged = merge_style((style.get("base") or "").strip(), styles, _seen)
+    for key, value in style.items():
+        if key in ("name", "base"):
+            continue
+        merged[key] = value
+    return merged
+
+
 def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
     box_id = row.get("box_id") or row.get("element_id") or "?"
     style_name = row.get("style", "").strip()
@@ -165,7 +194,8 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
         raise SkipRow(f"{box_id}: style 이 비어 있습니다")
     if style_name not in styles:
         raise ValueError(f"{box_id}: 원장에 없는 스타일 {style_name!r}")
-    style = styles[style_name]
+    # base 사슬을 병합해 상속받은 필드까지 갖춘 스타일로 해석한다
+    style = merge_style(style_name, styles)
 
     effect = (style.get("effect") or "").strip()
 
@@ -240,6 +270,15 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
     if not 0 <= squeeze_min < 1:
         raise ValueError(f"{box_id}: squeeze_min 은 0~1 미만이다: {squeeze_min}")
 
+    # line_height — 세로쓰기 글자 피치를 글꼴 크기의 배수로 (예: 1.0=빽빽,
+    # 1.5=여유). 0/미설정이면 기본(size+6). CSS line-height 식.
+    line_height = float(style.get("line_height") or 0)
+    if line_height < 0:
+        raise ValueError(f"{box_id}: line_height 는 0 이상이어야 합니다")
+
+    # angle — 상자별 틸트(회전). 행에 저장(스타일 아님). GUI 회전 핸들이 쓴다.
+    angle = float(row.get("angle") or 0)
+
     return RowSpec(
         box_id=box_id,
         file=row["file"],
@@ -263,6 +302,8 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
         base=(row.get("base") or "").strip(),
         overflow=overflow,
         squeeze_min=squeeze_min,
+        line_height=line_height,
+        angle=angle,
     )
 
 
@@ -428,8 +469,7 @@ def draw_rotated(
     font: ImageFont.FreeTypeFont,
     angle: float,
 ) -> None:
-    if spec.align != ("m", "m"):
-        raise ValueError(f"{spec.box_id}: rotate effect 는 text_align mm 만 지원합니다")
+    # 상자 중심을 축으로 회전 — 정렬과 무관하게 항상 중앙에 놓고 돌린다.
     bbox = _PROBE.textbbox((0, 0), spec.text, font=font,
                            stroke_width=spec.outline_w)
     padding = max(4, spec.outline_w + 2)
@@ -601,8 +641,10 @@ def draw_vertical(layer: Image.Image, spec: RowSpec,
     import re as _re
     bx, by, bw, bh = spec.box
     size = spec.size
-    pitch = size + 6 * spec.ss          # '+6' 은 1x 규격 — 슈퍼샘플 배율만큼
-    gap = pitch // 4
+    # 글자 피치 = line_height 있으면 size×배수, 없으면 기본(size + 6)
+    pitch = (round(size * spec.line_height) if spec.line_height
+             else size + 6 * spec.ss)    # '+6' 은 1x 규격 — 슈퍼샘플 배율만큼
+    gap = max(1, pitch // 4)
     parts = [t for t in _re.split(r"(\s+)", spec.text) if t]
     total = sum(gap if t.isspace() else pitch * len(t) for t in parts)
     h, v = spec.align
@@ -773,17 +815,61 @@ def draw_squeezed(layer: Image.Image, spec: RowSpec, font,
     layer.alpha_composite(squeezed)
 
 
+def draw_multiline(layer: Image.Image, spec: RowSpec,
+                   font: ImageFont.FreeTypeFont, lines: list) -> None:
+    """번역문에 줄바꿈(\\n)이 있으면 여러 줄로 쌓아 그린다.
+
+    줄 간격(pitch) = line_height(size 배수)가 있으면 그걸, 없으면 size×1.3.
+    세로 정렬(text_align 세로 t/m/b)은 여러 줄 **블록 전체**를 상자에 맞추고,
+    가로 정렬은 줄마다 적용한다.
+    """
+    from dataclasses import replace
+    top, bottom = metric_bounds(font, spec.outline_w)
+    pitch = (round(spec.size * spec.line_height) if spec.line_height
+             else round(spec.size * 1.3))
+    bx, by, bw, bh = spec.box
+    h, v = spec.align
+    block = pitch * len(lines)
+    if v == "t":
+        y0 = by
+    elif v == "b":
+        y0 = by + bh - block
+    else:
+        y0 = by + (bh - block) / 2
+    for i, line in enumerate(lines):
+        adv = advance(line, font)
+        sub = (bx, round(y0 + i * pitch), bw, pitch)   # 이 줄의 슬롯
+        position = pen_and_baseline(sub, (h, "m"), adv, top, bottom)
+        draw_effected(layer, position, replace(spec, text=line), font)
+
+
 def render_single(layer: Image.Image, spec: RowSpec,
                   fonts: FontCache) -> None:
     font = fonts.get(spec)
-    if spec.vertical:
-        draw_vertical(layer, spec, font)
+    if spec.vertical:                        # 세로쓰기 (틸트가 있으면 같이)
+        if spec.angle:
+            # 임시 레이어에 세로로 그린 뒤 상자 중심으로 회전 = 세로 + 틸트
+            temp = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+            draw_vertical(temp, spec, font)
+            bx, by, bw, bh = spec.box
+            temp = temp.rotate(spec.angle, center=(round(bx + bw / 2),
+                                                   round(by + bh / 2)),
+                               resample=Image.Resampling.BICUBIC)
+            layer.alpha_composite(temp)
+        else:
+            draw_vertical(layer, spec, font)
         return
     if spec.distribute:
         draw_distributed(layer, spec, font)
         return
     if spec.flow:
         draw_flow(layer, spec, font)
+        return
+    if spec.angle:                           # 상자별 틸트 — 상자 중심으로 회전
+        draw_rotated(layer, spec, font, spec.angle)
+        return
+    if "\n" in spec.text:                    # 여러 줄 번역문
+        draw_multiline(layer, spec, font, spec.text.split("\n"))
         return
     top, bottom = metric_bounds(font, spec.outline_w)
     adv = advance(spec.text, font)
