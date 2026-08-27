@@ -229,6 +229,13 @@ def flat_rows(data: dict) -> list[dict]:
         if slot is not None:
             _, rule = match_rule(rules_map, r.get("file", ""))
             slots = rule.get("slots") or []
+            if not slots:
+                # 논리 overlay 그룹은 이름 키라 경로매칭(match_rule)이 못 찾는다
+                # — 소속 그룹 규칙에서 공유 slots 를 가져온다.
+                grp = overlay_group_for(data, r.get("file", ""))
+                if grp:
+                    rule = rules_map.get(grp[0], {})
+                    slots = rule.get("slots") or []
             if 0 <= slot < len(slots):
                 spec = slots[slot]
                 if isinstance(spec, list):          # 구형 — text 상자만
@@ -323,6 +330,24 @@ def overlay_group_for(data: dict, relative: str, prefer: str | None = None):
     for name, base, members in groups:
         if relative == base or relative in members:
             return name, base, members
+    return None
+
+
+def shared_erased_base(data: dict, relative: str) -> str | None:
+    """same_pattern overlay 그룹의 멤버가 공유할 그룹 base(공통 지운 판) 상대경로.
+
+    멤버별 erased 파일이 없어도 base 판 하나를 공유한다 — 같은 패턴(동일 판)
+    무리는 지운 배경이 전부 같으니 판을 멤버마다 복제하지 않아도 된다.
+    base 자신이거나 · same_pattern 이 아니거나 · 그룹이 아니면 None.
+    """
+    grp = overlay_group_for(data, relative)
+    if not grp:
+        return None
+    name, base, members = grp
+    rule = (data.get("rules") or {}).get(name, {})
+    rel = (relative or "").replace("\\", "/")
+    if rule.get("same_pattern") and rel != base and rel in members:
+        return base
     return None
 
 

@@ -315,13 +315,18 @@ def advance(text: str, font: ImageFont.FreeTypeFont) -> float:
 
 
 def _scale_effect(effect: str, s: int) -> str:
-    """effect 문자열의 픽셀 인자만 s 배 — drop_shadow(dx,dy,blur). rotate 는 각도라 불변."""
-    m = SHADOW_RE.fullmatch(effect)
-    if not m:
+    """effect 문자열의 픽셀 인자만 s 배 — drop_shadow(dx,dy,blur). rotate 는 각도라 불변.
+    쉼표로 이은 여러 drop_shadow(음각용 위·아래 2겹 등)도 각각 스케일한다."""
+    if "drop_shadow" not in effect:
         return effect
-    dx, dy, blur = int(m.group(1)) * s, int(m.group(2)) * s, float(m.group(3)) * s
-    color = f",color={m.group(4)}" if m.group(4) else ""
-    return f"drop_shadow(dx={dx},dy={dy},blur={blur}{color})"
+
+    def repl(m):
+        dx, dy = int(m.group(1)) * s, int(m.group(2)) * s
+        blur = float(m.group(3)) * s
+        color = f",color={m.group(4)}" if m.group(4) else ""
+        return f"drop_shadow(dx={dx},dy={dy},blur={blur}{color})"
+
+    return SHADOW_RE.sub(repl, effect)
 
 
 def scale_spec(spec: RowSpec, s: int) -> RowSpec:
@@ -431,7 +436,8 @@ def draw_plain(
     spec: RowSpec,
     font: ImageFont.FreeTypeFont,
 ) -> None:
-    if spec.slant:
+    if spec.slant or (spec.fill[3] < 255 and not spec.outline_w):
+        # 반투명 fill 은 stamp 로 확실히 알파 합성 — 뒤 무늬가 비친다.
         stamp(layer, text_mask(layer.size, position, spec, font), spec.fill)
         return
     ImageDraw.Draw(layer).text(
@@ -757,17 +763,18 @@ def draw_flow(layer: Image.Image, spec: RowSpec,
 
 def draw_effected(layer: Image.Image, position, spec: RowSpec,
                   font: ImageFont.FreeTypeFont) -> None:
-    """그림자(있으면) → 글자 — 일반 단독 행의 공통 그리기 경로."""
-    shadow_match = SHADOW_RE.fullmatch(spec.effect)
-    if shadow_match:
-        dx, dy = int(shadow_match.group(1)), int(shadow_match.group(2))
-        blur = float(shadow_match.group(3))
-        color = (
-            parse_rgba8(shadow_match.group(4), spec.box_id)
-            if shadow_match.group(4)
-            else spec.outline
-        )
-        draw_shadow(layer, position, spec, font, dx, dy, blur, color)
+    """그림자(들, 있으면) → 글자 — 일반 단독 행의 공통 그리기 경로.
+
+    쉼표로 이은 drop_shadow 여러 겹을 나열 순서대로 글자 밑에 깐다 — 음각은
+    보통 위-왼쪽 어두운 그림자 + 아래-오른쪽 밝은 하이라이트 2겹이다."""
+    shadows = list(SHADOW_RE.finditer(spec.effect))
+    if shadows:
+        for m in shadows:
+            dx, dy = int(m.group(1)), int(m.group(2))
+            blur = float(m.group(3))
+            color = (parse_rgba8(m.group(4), spec.box_id)
+                     if m.group(4) else spec.outline)
+            draw_shadow(layer, position, spec, font, dx, dy, blur, color)
     elif spec.effect not in PLAIN_EFFECTS:
         raise ValueError(f"{spec.box_id}: 지원하지 않는 effect {spec.effect!r}")
     draw_plain(layer, position, spec, font)
@@ -1003,14 +1010,24 @@ def compose_file(
     specs: list[RowSpec],
     base_root: Path | None = None,
     posts: list[dict] | None = None,
+    data: dict | None = None,
 ) -> tuple[Image.Image, Path, bytes | None]:
     """베이스 + 원장 스펙으로 최종 이미지를 합성한다 (저장은 안 함).
 
     (합성 결과, 베이스 경로, 베이스 바이트) 를 돌려준다 — 저장 경로에서
     베이스 불변 검증에 쓴다. GUI 의 즉석 injected 미리보기도 이걸 쓴다.
+
+    data(원장)를 주면 same_pattern overlay 멤버는 멤버별 지운 판이 없을 때
+    그룹 base(공통 판)를 공유한다 — 판을 멤버마다 복제하지 않아도 된다.
     """
     source_path = safe_path(base_root or project.base_root, relative)
     original_path = safe_path(project.original_root, relative)
+    if data is not None and not source_path.exists():
+        shared = ledgermod.shared_erased_base(data, relative)
+        if shared:
+            alt = safe_path(base_root or project.base_root, shared)
+            if alt.exists():
+                source_path = alt
 
     # blank 베이스 (text-only 묶음) — 이미지 전체가 글자라 지울 것도 없다.
     # base 파일 없이 canvas 크기의 투명 캔버스에서 시작한다.
@@ -1074,10 +1091,13 @@ def compose_file(
     for spec in singles:
         if spec.effect == "alpha_clear":
             draw_alpha_clear(source, original, spec, fonts)
-        elif spec.fill[3] < 255 and mean_alpha(source, spec.box) > 128:
+        elif (spec.fill[3] < 255 and mean_alpha(source, spec.box) > 128
+              and spec.effect in PLAIN_EFFECTS):
             # opacity 가 걸린 행 + 불투명 베이스 = 알파 먹은 사본에 주입.
             # 베이스가 투명한 스프라이트는 아래 일반 경로에서 잉크에 알파를
-            # 실어 저장한다.
+            # 실어 저장한다. effect(음각 그림자 등)가 있으면 이 특수 경로가
+            # effect 를 못 실으므로 일반 텍스트-레이어 경로로 보낸다 — 거기서
+            # 반투명 fill 이 알파 합성돼 뒤 무늬(나무결)가 비친다.
             draw_rgb_ink(source, spec, fonts)
         else:
             render_single(text_layer_ss, scale_spec(spec, ss), fonts)
@@ -1101,9 +1121,10 @@ def render_file(
     output_root: Path | None = None,
     posts: list[dict] | None = None,
     restore_spec: dict | None = None,
+    data: dict | None = None,
 ) -> Path:
     output, source_path, source_bytes = compose_file(
-        project, relative, specs, base_root, posts)
+        project, relative, specs, base_root, posts, data)
     if restore_spec and list(output.size) == list(restore_spec["to"]):
         # 작업은 재조합 좌표계에서, 산출물은 게임 네이티브로 — 디스크에
         # 쓰는 순간이 유일한 복원 지점이다 (구 imgtext 의 주입 직전 복원을
@@ -1195,7 +1216,7 @@ def run(project: Project, statuses: set[str] | None = None, only: str = "",
             restore_spec = restore_by_file.get(relative)
             output_path = render_file(project, relative, file_specs, base_root,
                                       output_root, posts_by_file.get(relative),
-                                      restore_spec)
+                                      restore_spec, data)
             tag = " · 네이티브 복원" if restore_spec else ""
             print(f"saved {output_path} ({len(file_specs)}개 텍스트{tag})")
 

@@ -108,13 +108,12 @@
   <nav id="tree">불러오는 중…</nav>
   <section id="view"><div id="stage"></div></section>
   <aside id="props"><div class="empty">이미지 위 상자 영역을 클릭하면 속성이
-    표시됩니다. (테두리를 보려면 crop-box / text-box 토글)</div></aside>
+    표시됩니다. (text-box=번역 글자 위치 · source-box=원본 일본어 크기)</div></aside>
 </main>
 <script>
 const BASES = {"원본": "original", "erased": "erased", "injected": "injected"};
 let base = "원본";
-let overlays = {"crop-box": false, "text-box": false};   // 베이스와 독립 토글
-let syncBoxes = true;            // 켜면 상자 편집 시 crop·text·source 동기화 (기본 ON)
+let overlays = {"source-box": false, "text-box": false};   // 베이스와 독립 토글
 // 비교 보기: "" 단독 | "overlay" 겹침 | "v" 상하 | "h" 좌우 (원본 + injected)
 const COMPARE = {"겹침": "overlay", "상하": "v", "좌우": "h"};
 let compare = "", overlayAlpha = 0.5;   // 겹침 기본 = 중간 (원본에 텍스트 덧쓰기)
@@ -160,9 +159,12 @@ async function loadTree() {
     group.dataset.group = g.name;
     group.appendChild(document.createTextNode(g.name + " "));
     group.appendChild(el("span", "n", `(${g.count} · ${g.mode})`));
-    // 추출된 행이 하나도 없으면(=아직 손 안 댄 그룹) 그룹 이름 옆에 미정.
-    // 개별 파일(특히 base)엔 미정을 안 붙인다 — 그룹 단위로 옮김.
-    if (g.files.every(f => f.rows === 0))
+    // no-text 그룹(텍스트 없는 이미지)은 erased(clean 판)가 다 있으면 완료 —
+    // 다른 완료 항목처럼 마크 없음. erased 가 빠졌을 때만 미정으로 표시한다.
+    if (g.mode === "no-text") {
+      if (!g.files.every(f => f.erased))
+        group.appendChild(el("span", "undecided", " 미정(erased 필요)"));
+    } else if (g.files.every(f => f.rows === 0))
       group.appendChild(el("span", "undecided", " 미정"));
     const body = el("div");
     // 지금 열린 파일이 속한 그룹은 강조 + 펼쳐 둔다
@@ -221,24 +223,13 @@ function renderModes() {
   overlayBar.textContent = "";
   for (const name of Object.keys(overlays)) {
     const b = el("button", overlays[name] ? "on" : "", name);
+    b.title = name === "source-box"
+      ? "source-box: 원본 일본어 글자의 실제 크기·위치. (crop=hard boundary 가 설정돼 있으면 함께 표시)"
+      : "text-box: 번역 글자가 놓이는 위치 (기본).";
     b.onclick = () => { overlays[name] = !overlays[name];
                         renderModes(); renderStage(); };
     overlayBar.appendChild(b);
   }
-  // crop·text 동기화 토글 — 켜면 상자 하나를 옮길 때 셋(text·crop·source)이 함께
-  const syncBtn = el("button", syncBoxes ? "on" : "", "동기화");
-  syncBtn.title = "crop·text·source 상자를 한 몸으로 (편집 시 같이 이동)";
-  syncBtn.onclick = () => { syncBoxes = !syncBoxes; renderModes(); };
-  overlayBar.appendChild(syncBtn);
-  // 현재 그룹의 상자들을 지금 즉시 동기화 (crop=text=source)
-  const syncNow = el("button", "", "⇔ 전체 동기화");
-  syncNow.title = "지금 이 그룹의 모든 상자를 text 기준으로 맞춘다";
-  syncNow.onclick = async () => {
-    busy("동기화 중…");
-    finishOp(await postOp("/api/box/sync?path=" +
-      encodeURIComponent(detail.file), {scope: "file"}), selected);
-  };
-  overlayBar.appendChild(syncNow);
   const compareBar = document.getElementById("compare");
   compareBar.textContent = "";
   for (const [name, value] of Object.entries(COMPARE)) {
@@ -484,10 +475,17 @@ function renderStage() {
   // 상자 오버레이 — 어느 베이스 위에도 겹칠 수 있는 독립 토글
   for (const row of detail.rows) {
     const id = row.box_id;
-    if (overlays["crop-box"]) {
+    if (overlays["source-box"]) {
       const crop = rowRect(row, "crop");
       const src = rowRect(row, "source");
-      if (src) boxHost.appendChild(boxDiv("src", src, "", () => select(id)));
+      if (src) {
+        const sdiv = boxDiv("src", src, "", () => select(id));
+        // source 도 원본 일본어 틸트대로 (text-box 와 동일한 회전)
+        const sang = (detail.raw[id] && detail.raw[id].angle) || 0;
+        if (sang) { sdiv.style.transformOrigin = "center";
+                    sdiv.style.transform = "rotate(" + (-sang) + "deg)"; }
+        boxHost.appendChild(sdiv);
+      }
       if (crop) {
         const div = boxDiv("crop", crop, id, () => select(id));
         if (selected === id) {
@@ -513,7 +511,7 @@ function renderStage() {
           div.style.transform = "rotate(" + (-ang) + "deg)";
         }
         if (selected === id) {
-          if (!overlays["crop-box"]) div.classList.add("sel");
+          if (!overlays["source-box"]) div.classList.add("sel");
           addHandles(div, "text", text, id);
         }
         boxHost.appendChild(div);
@@ -521,7 +519,7 @@ function renderStage() {
     }
     // 토글을 켜지 않아도 박스 영역을 직접 클릭하면 선택되게 — 투명 히트 영역.
     // (crop 우선, 없으면 text) 토글이 켜져 있으면 위의 박스가 클릭을 처리한다.
-    if (!overlays["crop-box"] && !overlays["text-box"]) {
+    if (!overlays["source-box"] && !overlays["text-box"]) {
       const rect = rowRect(row, "crop") || rowRect(row, "text");
       if (rect) {
         const hit = boxDiv(selected === id ? "hit sel" : "hit", rect, "",
@@ -1168,6 +1166,15 @@ function renderProps() {
     () => { editMode = editMode === "split" ? null : "split";
             renderStage(); renderProps(); },
     editMode === "split"));
+  // 각도(틸트) 리셋 — 각도가 있을 때만 노출
+  const curAngle = (detail.raw[selected] && detail.raw[selected].angle) || 0;
+  if (curAngle) pane.appendChild(toolButton("↻ 각도 0 (현재 " + curAngle + "°)", async () => {
+    const id = selected;
+    busy("각도 리셋…");
+    finishOp(await postOp("/api/box/angle?path=" +
+      encodeURIComponent(detail.file) + "&id=" + encodeURIComponent(id),
+      {angle: 0}), id);
+  }));
 
   if (row._problem) {
     const banner = el("div", "", "⚠ " + row._problem);
@@ -1536,7 +1543,7 @@ window.addEventListener("mouseup", async () => {
   busy("상자 저장 중…");
   const res = await postOp("/api/box/update?path=" +
     encodeURIComponent(detail.file) + "&id=" + encodeURIComponent(r.id),
-    {key: r.key, rect: r.cur, sync: syncBoxes});
+    {key: r.key, rect: r.cur});
   // source(원문 영역)를 고쳤으면 그 박스만 자동 재판독 — 변경분만 업데이트
   if (res.ok && r.key === "source") {
     const rr = await postOp("/api/box/reread?path=" +
@@ -1622,7 +1629,7 @@ window.addEventListener("mouseup", ev => {
   if (rect[2] < 3 || rect[3] < 3) return;      // 너무 작으면 취소
   busy("상자 추가 중… (원문 판독 포함)");
   postOp("/api/box/add?path=" + encodeURIComponent(detail.file),
-         {rect, sync: syncBoxes})
+         {rect})
     .then(finishOp);
 });
 

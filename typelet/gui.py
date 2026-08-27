@@ -85,7 +85,9 @@ def build_tree(project: Project) -> dict:
     grouped: dict[str, list] = {}
     loose = []
     for relative, count in sorted(by_file.items()):
-        entry = {"file": relative, "rows": count}
+        # no-text 그룹은 텍스트가 없어 "완성" 판정을 erased(clean 판) 존재로 한다.
+        entry = {"file": relative, "rows": count,
+                 "erased": (project.base_root / relative).exists()}
         gnames = member_to_groups.get(relative)
         if gnames:                                  # overlay 그룹 멤버/베이스
             for gname in gnames:
@@ -776,8 +778,35 @@ def box_update(project: Project, relative: str, box_id: str,
     if rect[2] < 2 or rect[3] < 2:
         raise ValueError(f"상자가 너무 작습니다: {rect}")
     data = ledgermod.load(project)
+    rules_map = data.get("rules", {})
     for row in ledgermod.rows(data):
         if row.get("box_id") == box_id:      # box_id 유니크 (그룹 뷰 대응)
+            slot = row.get("slot")
+            grp = (ledgermod.overlay_group_for(data, row.get("file", ""))
+                   if slot is not None else None)
+            rule = rules_map.get(grp[0]) if grp else None
+            if rule is not None and rule.get("same_pattern"):
+                # same_pattern: 상자는 그룹이 공유한다 — 원문·번역만 멤버별로
+                # 다르고 text-box 는 하나다. 개별 행이 아니라 공유 slot 을 고쳐
+                # 전 멤버에 한 번에 반영한다.
+                slots = rule.setdefault("slots", [])
+                while len(slots) <= slot:
+                    slots.append({})
+                spec = slots[slot]
+                if isinstance(spec, list):
+                    spec = {"text": spec}
+                    slots[slot] = spec
+                keys = ("text", "crop", "source") if sync else (key,)
+                for k in keys:
+                    spec[k] = list(rect)
+                members = set(grp[2]) | {grp[1]}     # 남은 행별 override 제거
+                for r2 in ledgermod.rows(data):
+                    if r2.get("file") in members and r2.get("slot") == slot:
+                        for k in keys:
+                            r2.pop(k, None)
+                ledgermod.save(project, data)
+                _INJECT_CACHE.clear()
+                return f"{box_id}.{key} = {rect} (공유 slot — 그룹 전체)"
             if sync:
                 for k in ("text", "crop", "source"):
                     row[k] = list(rect)      # 세 상자를 한 몸으로 동기화
@@ -1042,10 +1071,21 @@ def make_handler(project: Project, config_path: Path | None = None):
                     #   original = 원본 base + 원본 오버레이(일본어) 합성
                     #   erased   = erased base + erased 오버레이(빨간 마커) 합성
                     #   injected = erased 합성 위에 그룹 전체 ko 주입
-                    grp = overlay_group(project, ledgermod.load(project), relative,
+                    img_data = ledgermod.load(project)
+                    grp = overlay_group(project, img_data, relative,
                                         group_name=group)
                     if grp:
                         _gk, base_rel, overlays = grp
+                        # same_pattern 무리: 멤버별 지운 판이 없으면 그룹 base
+                        # (공통 판)를 공유 — erased 합성에서 그 멤버를 빼 base 판만
+                        # 남긴다(원본 일본어로 폴백하지 않게).
+                        rule_g = (img_data.get("rules") or {}).get(_gk, {})
+                        er_overlays = overlays
+                        if rule_g.get("same_pattern"):
+                            def _has_erased(o):
+                                p = _safe_join(project.base_root, o)
+                                return bool(p and p.exists())
+                            er_overlays = [o for o in overlays if _has_erased(o)]
                         query = parse_qs(url.query)
                         overrides = json.loads(query.get("styles", ["null"])[0]
                                                or "null")
@@ -1054,12 +1094,12 @@ def make_handler(project: Project, config_path: Path | None = None):
                         elif kind == "erased":
                             # 지운 타일(빨간 마커) 우선, 없으면 원본으로 폴백
                             body = composite_group(
-                                project, base_rel, overlays,
+                                project, base_rel, er_overlays,
                                 roots=[project.base_root, project.original_root])
                         elif kind == "injected":
                             # injected = erased 합성(지운 배경) 위에 ko 주입
                             er_png = composite_group(
-                                project, base_rel, overlays,
+                                project, base_rel, er_overlays,
                                 roots=[project.base_root, project.original_root])
                             base_img = Image.open(io.BytesIO(er_png)) \
                                 .convert("RGBA") if er_png else None

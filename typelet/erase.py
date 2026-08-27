@@ -52,8 +52,8 @@ def _rects_by_file(data: dict, only: str) -> dict[str, list[tuple[int, int, int,
             continue                     # text-only — 지울 것이 없다
         # ignore 규칙이 걸린 파일은 낡은 행이 남아 있어도 지우지 않는다
         _, rule = ledgermod.match_rule(rules_map, relative)
-        if ledgermod.rule_mode(rule) in ("text-only", "ignore"):
-            continue
+        if ledgermod.rule_mode(rule) in ("text-only", "ignore", "no-text"):
+            continue                     # no-text — 지울 텍스트가 없다(clean 판은 별도 제공)
         rect = rect_of(flat, "crop_") \
             or rect_of(flat, "source_", ("box_w", "box_h"))
         if rect:
