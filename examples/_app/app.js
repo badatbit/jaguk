@@ -325,14 +325,24 @@ function scheduleRender() {
 }
 
 // ---- 왼쪽: 규칙 그룹 / 파일 목록 ----
+// jaguk GUI 규약: cat 있는 그룹은 카테고리 폴더로 접고(원장 rules 등장
+// 순서 유지), cat 없는 그룹은 폴더 없이 최상위에 먼저 온다.
 const openKeys = new Set();
-function fileEntries() {
-  // [{key, label, files:[rel…]}] — 규칙 그룹 우선, 그룹 밖은 디렉토리로
-  const out = [];
+function sidebarTree() {
+  const bare = [], folders = [], byCat = new Map();
   for (const g of DATA.groups || []) {
     const n = g.files.reduce((s, f) => s + byRel.get(f).rows.length, 0);
-    out.push({key: "g:" + g.name, label: `${g.name} (${n} · ${g.mode})`,
-              files: g.files});
+    const entry = {kind: "group", key: "g:" + g.name,
+                   label: `${g.name} (${n} · ${g.mode})`, files: g.files};
+    if (g.cat) {
+      if (!byCat.has(g.cat)) {
+        const folder = {kind: "cat", key: "c:" + g.cat, label: g.cat,
+                        children: []};
+        byCat.set(g.cat, folder);
+        folders.push(folder);
+      }
+      byCat.get(g.cat).children.push(entry);
+    } else bare.push(entry);
   }
   const dirs = new Map();
   for (const rel of DATA.loose || []) {
@@ -340,9 +350,55 @@ function fileEntries() {
     if (!dirs.has(dir)) dirs.set(dir, []);
     dirs.get(dir).push(rel);
   }
-  for (const [dir, rels] of dirs)
-    out.push({key: "d:" + dir, label: `${dir} (${rels.length})`, files: rels});
-  return out;
+  const loose = [...dirs].map(([dir, rels]) =>
+    ({kind: "dir", key: "d:" + dir, label: `${dir} (${rels.length})`,
+      files: rels}));
+  return [...bare, ...folders, ...loose];
+}
+
+function koPreview(f) {
+  // 텍스트 1개인 파일은 파일명 옆에 ko 축약 (전각공백 제거, 5자 넘으면 …)
+  if (f.rows.length !== 1) return null;
+  const ko = (koOf(f.rows[0]) || "").replace(/　/g, "");
+  if (!ko) return null;
+  return [...ko].length > 5 ? [...ko].slice(0, 5).join("") + "…" : ko;
+}
+
+function makeGroupDetails(entry, filter) {
+  const files = filter
+    ? (entry.label.toLowerCase().includes(filter)
+       ? entry.files
+       : entry.files.filter(r => r.toLowerCase().includes(filter)))
+    : entry.files;
+  if (!files.length) return null;
+  const det = document.createElement("details");
+  det.open = !!filter || files.includes(fileRel) || openKeys.has(entry.key);
+  const sum = document.createElement("summary");
+  sum.textContent = entry.label;
+  det.appendChild(sum);
+  det.addEventListener("toggle", () => {
+    if (det.open) openKeys.add(entry.key); else openKeys.delete(entry.key);
+  });
+  for (const rel of files) {
+    const f = byRel.get(rel);
+    const b = document.createElement("button");
+    b.className = "item" + (rel === fileRel ? " on" : "");
+    b.textContent = rel.slice(rel.lastIndexOf("/") + 1);
+    b.title = rel;
+    const preview = koPreview(f);
+    const n = document.createElement("span");
+    n.className = "n";
+    n.textContent = preview !== null ? preview : f.rows.length;
+    b.appendChild(n);
+    b.addEventListener("click", () => {
+      fileRel = rel;
+      saveState();
+      renderFileList(); renderRowsPanel(); renderStage();
+    });
+    det.appendChild(b);
+  }
+  det._count = files.length;
+  return det;
 }
 
 function renderFileList() {
@@ -350,40 +406,34 @@ function renderFileList() {
   const list = document.getElementById("fileList");
   list.textContent = "";
   let shown = 0;
-  for (const entry of fileEntries()) {
-    const files = filter
-      ? (entry.label.toLowerCase().includes(filter)
-         ? entry.files
-         : entry.files.filter(r => r.toLowerCase().includes(filter)))
-      : entry.files;
-    if (!files.length) continue;
-    shown += files.length;
-    const det = document.createElement("details");
-    det.open = !!filter || files.includes(fileRel) || openKeys.has(entry.key);
-    const sum = document.createElement("summary");
-    sum.textContent = entry.label;
-    det.appendChild(sum);
-    det.addEventListener("toggle", () => {
-      if (det.open) openKeys.add(entry.key); else openKeys.delete(entry.key);
-    });
-    for (const rel of files) {
-      const f = byRel.get(rel);
-      const b = document.createElement("button");
-      b.className = "item" + (rel === fileRel ? " on" : "");
-      b.textContent = rel.slice(rel.lastIndexOf("/") + 1);
-      b.title = rel;
-      const n = document.createElement("span");
-      n.className = "n";
-      n.textContent = f.rows.length;
-      b.appendChild(n);
-      b.addEventListener("click", () => {
-        fileRel = rel;
-        saveState();
-        renderFileList(); renderRowsPanel(); renderStage();
+  for (const node of sidebarTree()) {
+    if (node.kind === "cat") {
+      const kids = [];
+      const catHit = filter && node.label.toLowerCase().includes(filter);
+      for (const child of node.children) {
+        const det = makeGroupDetails(child, catHit ? "" : filter);
+        if (det) kids.push(det);
+      }
+      if (!kids.length) continue;
+      const folder = document.createElement("details");
+      folder.className = "cat";
+      folder.open = !!filter
+        || kids.some(k => k.querySelector(".item.on"))
+        || openKeys.has(node.key);
+      const sum = document.createElement("summary");
+      sum.textContent = `${node.label} (${node.children.length})`;
+      folder.appendChild(sum);
+      folder.addEventListener("toggle", () => {
+        if (folder.open) openKeys.add(node.key); else openKeys.delete(node.key);
       });
-      det.appendChild(b);
+      for (const k of kids) { shown += k._count; folder.appendChild(k); }
+      list.appendChild(folder);
+    } else {
+      const det = makeGroupDetails(node, filter);
+      if (!det) continue;
+      shown += det._count;
+      list.appendChild(det);
     }
-    list.appendChild(det);
   }
   const total = DATA.files.reduce((s, f) => s + f.rows.length, 0);
   document.getElementById("fileCount").textContent = filter

@@ -35,6 +35,10 @@ main { display: flex; height: calc(100vh - 49px); }
                  overflow: hidden; text-overflow: ellipsis; }
 #files summary:hover { color: var(--fg); }
 #files summary .mode { color: #6f7787; margin-left: 4px; }
+#files details.cat > summary { color: #aeb6c8; font-weight: 600; }
+#files details.cat details { border-bottom: none; }
+#files details.cat details > summary { padding-left: 22px; }
+#files details.cat .item { padding-left: 34px; }
 #files .item { display: block; width: 100%; text-align: left; border: none;
                background: none; border-radius: 0; padding: 3px 10px 3px 22px;
                font-size: 12px; white-space: nowrap; overflow: hidden;
