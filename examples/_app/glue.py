@@ -18,16 +18,33 @@ STYLES = ledgermod.styles_map(DATA)
 FLOWS = {r["box_id"]: r["flow"] for r in ledgermod.rows(DATA) if r.get("flow")}
 
 
+def _apply_edits(all_rows, edits):
+    """{box_id: "ko"} (구 형식) 또는 {box_id: {ko?, box?, crop?}} 를 얹는다.
+
+    box/crop 은 [x, y, w, h] — 원장 좌표계의 상자 오버라이드."""
+    for r in all_rows:
+        e = edits.get(r.get("box_id"))
+        if e is None:
+            continue
+        if isinstance(e, str):
+            r["ko_text"] = e
+            continue
+        if "ko" in e:
+            r["ko_text"] = e["ko"]
+        for key, prefix in (("box", "text_"), ("crop", "crop_")):
+            rect = e.get(key)
+            if isinstance(rect, list) and len(rect) == 4:
+                for name, value in zip(("x", "y", "w", "h"), rect):
+                    r[prefix + name] = str(int(value))
+
+
 def render_png(rel, edits_json):
     """rel 파일을 현재 원장 + edits 로 합성한 PNG 바이트 (GUI 미리보기 경로).
 
     overlay 그룹 멤버는 그룹 base(원본)를 밑판으로 깔아 돌려준다."""
     edits = json.loads(edits_json or "{}")
     all_rows = ledgermod.flat_rows(DATA)
-    for r in all_rows:
-        bid = r.get("box_id")
-        if bid in edits:
-            r["ko_text"] = edits[bid]
+    _apply_edits(all_rows, edits)
     sel = [r for r in all_rows
            if r.get("file") == rel
            and r.get("status") in ("render_ready", "todo")

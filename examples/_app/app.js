@@ -23,6 +23,9 @@ let fileRel = DATA.files[0].rel;
 let view = "injected", bgIdx = 3, zoomMode = "fit", showBoxes = false;
 let edits = {};
 try { edits = JSON.parse(localStorage.getItem(STORE) || "{}"); } catch (e) {}
+// 구 형식({box_id: "ko"}) → {box_id: {ko}} 로 이행 — 상자 수정과 공존
+for (const k of Object.keys(edits))
+  if (typeof edits[k] === "string") edits[k] = {ko: edits[k]};
 try {
   const s = JSON.parse(localStorage.getItem(STATE) || "null");
   if (s) {
@@ -56,7 +59,39 @@ function saveState() {
       {rel: fileRel, view, bgIdx, zoom: zoomMode, boxes: showBoxes}));
   } catch (e) {}
 }
-function koOf(row) { return edits[row.box_id] !== undefined ? edits[row.box_id] : row.ko; }
+function koOf(row) {
+  const e = edits[row.box_id];
+  return e && e.ko !== undefined ? e.ko : row.ko;
+}
+function effBox(row) {
+  const e = edits[row.box_id];
+  return e && e.box ? e.box : row.box;
+}
+function effCrop(row) {
+  const e = edits[row.box_id];
+  return e && e.crop ? e.crop : (row.crop || null);
+}
+function isEdited(id) { return edits[id] !== undefined; }
+function editEntry(id) { return edits[id] || (edits[id] = {}); }
+function pruneEntry(id) {
+  const e = edits[id];
+  if (e && e.ko === undefined && !e.box && !e.crop) delete edits[id];
+}
+function setRect(file, id, kind, rect) {
+  // run 멤버는 text 상자를 공유한다 — 같이 옮겨야 렌더 검증이 통과한다
+  const row = file.rows.find(r => r.box_id === id);
+  const targets = (kind === "box" && row && row.run)
+    ? file.rows.filter(r => r.run === row.run) : [row];
+  for (const t of targets) {
+    if (!t) continue;
+    const orig = kind === "box" ? t.box : t.crop;
+    const e = editEntry(t.box_id);
+    if (orig && rect.every((v, i) => v === orig[i])) delete e[kind];
+    else e[kind] = rect.slice();
+    pruneEntry(t.box_id);
+  }
+  saveEdits();
+}
 
 // ---- 골격 ----
 document.body.insertAdjacentHTML("afterbegin", `
@@ -89,7 +124,9 @@ document.body.insertAdjacentHTML("afterbegin", `
     <div class="head" id="sideHead"></div>
     <div id="rows"></div>
     <div id="note">
-      번역을 고치면 즉시 다시 렌더링됩니다. 수정은 이 브라우저의
+      번역을 고치면 즉시 다시 렌더링됩니다. <b>상자</b>를 켜면 스테이지에서
+      상자를 드래그해 옮기고 핸들로 크기를 바꿀 수 있습니다 (초록 = text,
+      자주 = crop; 행의 id/원문을 클릭해도 선택). 수정은 이 브라우저의
       <b>localStorage에만</b> 저장됩니다 — 서버·원장에는 아무것도 쓰지 않습니다.<br><br>
       주입 렌더는 별도 구현이 아니라 <a
       href="https://github.com/badatbit/jaguk">typelet</a>
@@ -284,28 +321,179 @@ function showMessage(text, isErr) {
   stage.appendChild(div);
 }
 
-function drawBoxesOverlay(file, w, h) {
-  const cv = document.createElement("canvas");
-  cv.width = w; cv.height = h;
-  cv.className = "layer";
-  cv.style.pointerEvents = "none";
-  const c = cv.getContext("2d");
+// ---- 상자 편집 오버레이 — 드래그로 이동, 핸들로 리사이즈 ----
+// 수정은 edits[box_id].box/.crop 에 얹혀 localStorage 로만 저장되고,
+// 렌더는 같은 typelet 엔진이 수정된 좌표로 다시 그린다.
+let selected = null;             // {id, kind: "box"|"crop"}
+let overlayEl = null;
+let drag = null;
+const HANDLES = [[0, 0], [.5, 0], [1, 0], [1, .5], [1, 1], [.5, 1], [0, 1], [0, .5]];
+const HANDLE_CURSORS = ["nwse-resize", "ns-resize", "nesw-resize", "ew-resize",
+                        "nwse-resize", "ns-resize", "nesw-resize", "ew-resize"];
+
+function selectedRect(file) {
+  if (!selected) return null;
+  const row = file.rows.find(r => r.box_id === selected.id);
+  if (!row) return null;
+  return selected.kind === "crop" ? effCrop(row) : effBox(row);
+}
+
+function redrawOverlay(file) {
+  if (!overlayEl) return;
+  const c = overlayEl.getContext("2d");
+  c.clearRect(0, 0, overlayEl.width, overlayEl.height);
   c.lineWidth = 1;
   for (const row of file.rows) {
-    if (row.crop) {
+    const crop = effCrop(row);
+    if (crop) {
       c.strokeStyle = "#d05ce3";
-      c.strokeRect(row.crop[0] + .5, row.crop[1] + .5, row.crop[2] - 1, row.crop[3] - 1);
+      c.strokeRect(crop[0] + .5, crop[1] + .5, crop[2] - 1, crop[3] - 1);
     }
+    const box = effBox(row);
     c.strokeStyle = "#39d98a";
-    c.strokeRect(row.box[0] + .5, row.box[1] + .5, row.box[2] - 1, row.box[3] - 1);
+    c.strokeRect(box[0] + .5, box[1] + .5, box[2] - 1, box[3] - 1);
     if (row.flow) {
       c.strokeStyle = "#e8b73c";
       for (const b of row.flow)
         c.strokeRect(b[0] + .5, b[1] + .5, b[2] - 1, b[3] - 1);
     }
   }
+  const rect = selectedRect(file);
+  if (rect) {
+    const scale = overlayScale();
+    c.lineWidth = Math.max(1, 2 / scale);
+    c.strokeStyle = selected.kind === "crop" ? "#d05ce3" : "#39d98a";
+    c.strokeRect(rect[0] + .5, rect[1] + .5, rect[2] - 1, rect[3] - 1);
+    const hs = Math.max(3, 6 / scale);
+    c.fillStyle = "#ffffff";
+    c.strokeStyle = "#14161a";
+    c.lineWidth = Math.max(1, 1 / scale);
+    for (const [fx, fy] of HANDLES) {
+      const hx = rect[0] + fx * rect[2], hy = rect[1] + fy * rect[3];
+      c.fillRect(hx - hs / 2, hy - hs / 2, hs, hs);
+      c.strokeRect(hx - hs / 2, hy - hs / 2, hs, hs);
+    }
+  }
+}
+
+function overlayScale() {
+  if (!overlayEl) return 1;
+  const r = overlayEl.getBoundingClientRect();
+  return r.width ? r.width / overlayEl.width : 1;
+}
+function toImg(ev) {
+  const r = overlayEl.getBoundingClientRect();
+  const s = overlayScale();
+  return [(ev.clientX - r.left) / s, (ev.clientY - r.top) / s];
+}
+function hitHandle(file, pt) {
+  const rect = selectedRect(file);
+  if (!rect) return -1;
+  const tol = Math.max(4, 7 / overlayScale());
+  for (let i = 0; i < HANDLES.length; i++) {
+    const hx = rect[0] + HANDLES[i][0] * rect[2];
+    const hy = rect[1] + HANDLES[i][1] * rect[3];
+    if (Math.abs(pt[0] - hx) <= tol && Math.abs(pt[1] - hy) <= tol) return i;
+  }
+  return -1;
+}
+function hitBox(file, pt) {
+  const tol = Math.max(2, 4 / overlayScale());
+  let best = null;
+  for (const row of file.rows) {
+    for (const [kind, rect] of [["crop", effCrop(row)], ["box", effBox(row)]]) {
+      if (!rect) continue;
+      if (pt[0] >= rect[0] - tol && pt[0] <= rect[0] + rect[2] + tol &&
+          pt[1] >= rect[1] - tol && pt[1] <= rect[1] + rect[3] + tol) {
+        const area = rect[2] * rect[3];
+        if (!best || area < best.area)
+          best = {id: row.box_id, kind, rect, area};
+      }
+    }
+  }
+  return best;
+}
+
+function resizeRect(orig, handle, dx, dy) {
+  let [x, y, w, h] = orig;
+  const [fx, fy] = HANDLES[handle];
+  if (fx === 0) { x += dx; w -= dx; }
+  else if (fx === 1) { w += dx; }
+  if (fy === 0) { y += dy; h -= dy; }
+  else if (fy === 1) { h += dy; }
+  if (w < 1) { if (fx === 0) x += w - 1; w = 1; }
+  if (h < 1) { if (fy === 0) y += h - 1; h = 1; }
+  return [x, y, w, h].map(Math.round);
+}
+
+function attachOverlayEvents(file) {
+  const cv = overlayEl;
+  cv.style.pointerEvents = "auto";
+  cv.addEventListener("pointerdown", ev => {
+    ev.preventDefault();
+    const pt = toImg(ev);
+    const hi = hitHandle(file, pt);
+    if (hi >= 0) {
+      drag = {mode: hi, start: pt, orig: selectedRect(file).slice()};
+    } else {
+      const hit = hitBox(file, pt);
+      if (hit) {
+        selected = {id: hit.id, kind: hit.kind};
+        drag = {mode: "move", start: pt,
+                orig: selectedRect(file).slice()};
+        syncTableSel();
+      } else {
+        selected = null;
+      }
+    }
+    redrawOverlay(file);
+    cv.setPointerCapture(ev.pointerId);
+  });
+  cv.addEventListener("pointermove", ev => {
+    const pt = toImg(ev);
+    if (drag && selected) {
+      const dx = pt[0] - drag.start[0], dy = pt[1] - drag.start[1];
+      const rect = drag.mode === "move"
+        ? [Math.round(drag.orig[0] + dx), Math.round(drag.orig[1] + dy),
+           drag.orig[2], drag.orig[3]]
+        : resizeRect(drag.orig, drag.mode, Math.round(dx), Math.round(dy));
+      setRect(file, selected.id, selected.kind, rect);
+      setStat(`${selected.id} ${selected.kind}: `
+              + `${rect[0]},${rect[1]} ${rect[2]}×${rect[3]}`);
+      redrawOverlay(file);
+      return;
+    }
+    const hi = hitHandle(file, pt);
+    cv.style.cursor = hi >= 0 ? HANDLE_CURSORS[hi]
+      : (hitBox(file, pt) ? "move" : "default");
+  });
+  const finish = () => {
+    if (!drag) return;
+    drag = null;
+    setStat("");
+    renderRowsPanel();               // 수정 표시 갱신
+    scheduleRender();                // 엔진 재렌더 (주입 보기일 때)
+  };
+  cv.addEventListener("pointerup", finish);
+  cv.addEventListener("pointercancel", finish);
+}
+
+function drawBoxesOverlay(file, w, h) {
+  const cv = document.createElement("canvas");
+  cv.width = w; cv.height = h;
+  cv.className = "layer";
+  overlayEl = cv;
+  redrawOverlay(file);
+  attachOverlayEvents(file);
   return cv;
 }
+
+window.addEventListener("keydown", ev => {
+  if (ev.key === "Escape" && selected) {
+    selected = null;
+    if (overlayEl) redrawOverlay(byRel.get(fileRel));
+  }
+});
 
 function applyZoom(naturalW) {
   const wrap = document.getElementById("stage-wrap");
@@ -454,19 +642,49 @@ function renderRowsPanel() {
   const tbody = document.createElement("tbody");
   for (const row of file.rows) {
     const tr = document.createElement("tr");
-    if (edits[row.box_id] !== undefined) tr.className = "edited";
+    tr.dataset.id = row.box_id;
+    if (isEdited(row.box_id)) tr.classList.add("edited");
+    if (selected && selected.id === row.box_id) tr.classList.add("sel");
     const td1 = document.createElement("td");
     td1.className = "id"; td1.textContent = row.box_id;
+    if (isEdited(row.box_id)) {              // 행 단위 되돌리기 (ko + 상자)
+      const undo = document.createElement("button");
+      undo.className = "undo";
+      undo.textContent = "↺";
+      undo.title = "이 행의 수정(번역·상자)을 되돌린다";
+      undo.addEventListener("click", ev => {
+        ev.stopPropagation();
+        delete edits[row.box_id];
+        saveEdits();
+        renderRowsPanel();
+        renderStage();
+      });
+      td1.appendChild(undo);
+    }
     const td2 = document.createElement("td");
     td2.className = "jp"; td2.textContent = row.jp || "—";
+    // id/원문 클릭 = 그 행의 text 상자 선택 (상자 오버레이 자동 켬)
+    for (const td of [td1, td2])
+      td.addEventListener("click", () => {
+        selected = {id: row.box_id, kind: "box"};
+        if (!showBoxes) {
+          showBoxes = true;
+          document.getElementById("boxBtn").classList.add("on");
+          saveState();
+          renderStage();
+        } else if (overlayEl) redrawOverlay(file);
+        syncTableSel();
+      });
     const td3 = document.createElement("td");
     td3.className = "ko";
     const input = document.createElement("input");
     input.value = koOf(row);
     input.addEventListener("input", () => {
-      if (input.value === row.ko) delete edits[row.box_id];
-      else edits[row.box_id] = input.value;
-      tr.classList.toggle("edited", edits[row.box_id] !== undefined);
+      const e = editEntry(row.box_id);
+      if (input.value === row.ko) delete e.ko;
+      else e.ko = input.value;
+      pruneEntry(row.box_id);
+      tr.classList.toggle("edited", isEdited(row.box_id));
       saveEdits();                           // localStorage 전용 — 서버 기록 없음
       if (view !== "injected") { view = "injected"; renderViewButtons(); }
       scheduleRender();
@@ -477,6 +695,13 @@ function renderRowsPanel() {
   }
   table.appendChild(tbody);
   holder.appendChild(table);
+}
+
+function syncTableSel() {
+  for (const tr of document.querySelectorAll("#rows tr"))
+    tr.classList.toggle("sel", !!selected && tr.dataset.id === selected.id);
+  const cur = document.querySelector("#rows tr.sel");
+  if (cur) cur.scrollIntoView({block: "nearest"});
 }
 
 // ---- 헤더 컨트롤 ----

@@ -70,6 +70,10 @@ main { display: flex; height: calc(100vh - 49px); }
                     padding: 2px 6px; font: inherit; cursor: text; }
 #rows td.ko input:focus { border-color: var(--accent); outline: none; }
 #rows tr.edited td.ko input { border-color: #b8860b; }
+#rows tr.sel td { background: #232d42; }
+#rows td.id, #rows td.jp { cursor: pointer; }
+#rows td.id .undo { margin-left: 6px; padding: 0 6px; font-size: 11px;
+                    border-radius: 3px; line-height: 1.4; }
 #note { padding: 10px 12px; color: var(--muted); font-size: 12px;
         border-top: 1px solid var(--line); }
 #note a { color: var(--accent); }

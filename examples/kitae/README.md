@@ -24,7 +24,8 @@ Pyodide/WebAssembly + Pillow 로 브라우저에서 **그대로 실행**한 결�
 - 상자 틸트(angle, 세로쓰기 조합 포함) · 여러 줄(\n) · 세로쓰기 ·
   rgb_ink(반투명 잉크를 불투명 판에) · 다중 drop_shadow.
 
-번역 수정은 브라우저 **localStorage 에만** 저장됩니다.
+번역 수정과 상자 편집(드래그 이동·핸들 리사이즈)은 브라우저
+**localStorage 에만** 저장됩니다.
 `?file=soz_016&boxes=1` 식 URL 로 초기 상태 지정. 구성은
 [풍우래기3 예제](../furaiki3/)와 같습니다 (project/ 원장+설정, fonts/,
 assets/, data.js 매니페스트, 공용 앱 [../_app/](../_app/)).
