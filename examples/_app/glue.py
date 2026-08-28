@@ -37,8 +37,39 @@ class Driver(Handler):
             method()
 
 
+def _debug_render(target):
+    """gui.render_injected 가 삼키는 예외를 트레이스백으로 꺼내는 진단 경로."""
+    import traceback
+    from urllib.parse import parse_qs, urlparse
+    rel = parse_qs(urlparse(target).query).get("path", [""])[0]
+    try:
+        from typelet import ledger as ledgermod, render as rendermod
+        data = ledgermod.load(PROJECT)
+        styles = ledgermod.styles_map(data)
+        flat = [r for r in ledgermod.flat_rows(data) if r["file"] == rel]
+        specs = []
+        for row in flat:
+            if row.get("status") == "no_inject":
+                continue
+            if not (row.get("ko_text") or "").strip():
+                continue
+            try:
+                specs.append(rendermod.resolve(row, styles))
+            except rendermod.SkipRow as e:
+                specs.append(None)
+        posts = [p for p in data.get("post", []) if p.get("file") == rel]
+        out, _, _ = rendermod.compose_file(
+            PROJECT, rel, [s for s in specs if s], posts=posts or None)
+        text = f"OK {out.size} specs={len(specs)}"
+    except Exception:
+        text = traceback.format_exc()
+    return 200, "text/plain; charset=utf-8", text.encode("utf-8")
+
+
 def serve(method, target, body=None):
     """(status, content_type, body_bytes) — target 은 경로+쿼리."""
+    if target.startswith("/api/debug-render"):
+        return _debug_render(target)
     payload = bytes(body) if body is not None else b""
     head = (f"{method} {target} HTTP/1.1\r\n"
             f"Host: local\r\n"

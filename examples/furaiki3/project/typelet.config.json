@@ -11,9 +11,9 @@
   "IBM Plex Sans KR/500": "IBMPlexSansKR-Medium.otf",
   "IBM Plex Sans KR/600": "IBMPlexSansKR-SemiBold.otf",
   "NexonFootballGothic/300": "NEXON Football Gothic L.otf",
-  "SchoolSafetySusukkang/400": "HakgyoansimSusukkangL.woff2",
-  "YeolrinMyeongjo/500": "YeolrinMyeongjo-Medium.woff",
-  "YeolrinMyeongjo/700": "YeolrinMyeongjo-Bold.woff"
+  "SchoolSafetySusukkang/400": "HakgyoansimSusukkangL.ttf",
+  "YeolrinMyeongjo/500": "YeolrinMyeongjo-Medium.ttf",
+  "YeolrinMyeongjo/700": "YeolrinMyeongjo-Bold.ttf"
  },
  "supersample": 4
 }
