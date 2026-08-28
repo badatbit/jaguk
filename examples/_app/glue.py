@@ -1,82 +1,68 @@
 # -*- coding: utf-8 -*-
-"""브라우저(Pyodide)에서 typelet 렌더를 **그대로** 돌리는 접착 코드.
+"""브라우저(Pyodide)에서 jaguk GUI 서버를 **그대로** 구동하는 접착 코드.
 
-별도 렌더러가 아니다 — /lib 에 실린 typelet 패키지(레포와 동일 소스)의
-resolve/compose_file 을 그대로 호출한다. 파이프라인·jaguk GUI 와 같은 코드
-경로라 산출도 같다. 번역 수정(edits)은 렌더 직전 메모리에서만 얹는다."""
+별도 구현이 아니다 — /lib 의 typelet.gui.make_handler() 가 만드는 실제
+HTTP 핸들러를 가짜 소켓(BytesIO)으로 구동한다. 로컬에서 `jaguk gui` 가
+띄우는 서버와 같은 코드 경로이므로 응답도 같다. 원장 수정(상자 이동·
+번역·스타일…)은 브라우저 FS 의 원장 파일에 쓰이고, 바깥(JS)이 이를
+localStorage 로 미러링한다."""
 import io
-import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, "/lib")
-from typelet import config as tconfig, ledger as ledgermod, render  # noqa: E402
+from typelet import config as tconfig, gui as guimod  # noqa: E402
 
-PROJECT = tconfig.load_path(Path("/proj/typelet.config.json"))
-DATA = ledgermod.load(PROJECT)
-STYLES = ledgermod.styles_map(DATA)
-FLOWS = {r["box_id"]: r["flow"] for r in ledgermod.rows(DATA) if r.get("flow")}
-
-
-def _apply_edits(all_rows, edits):
-    """{box_id: "ko"} (구 형식) 또는 {box_id: {ko?, box?, crop?}} 를 얹는다.
-
-    box/crop 은 [x, y, w, h] — 원장 좌표계의 상자 오버라이드."""
-    for r in all_rows:
-        e = edits.get(r.get("box_id"))
-        if e is None:
-            continue
-        if isinstance(e, str):
-            r["ko_text"] = e
-            continue
-        if "ko" in e:
-            r["ko_text"] = e["ko"]
-        for key, prefix in (("box", "text_"), ("crop", "crop_")):
-            rect = e.get(key)
-            if isinstance(rect, list) and len(rect) == 4:
-                for name, value in zip(("x", "y", "w", "h"), rect):
-                    r[prefix + name] = str(int(value))
+CONFIG = Path("/proj/typelet.config.json")
+PROJECT = tconfig.load_path(CONFIG)
+Handler = guimod.make_handler(PROJECT, config_path=CONFIG)
 
 
-def render_png(rel, edits_json):
-    """rel 파일을 현재 원장 + edits 로 합성한 PNG 바이트 (GUI 미리보기 경로).
+class Driver(Handler):
+    """소켓 없이 핸들러를 한 요청만큼 돌린다 — rfile/wfile 만 흉내낸다."""
 
-    overlay 그룹 멤버는 그룹 base(원본)를 밑판으로 깔아 돌려준다."""
-    edits = json.loads(edits_json or "{}")
-    all_rows = ledgermod.flat_rows(DATA)
-    _apply_edits(all_rows, edits)
-    sel = [r for r in all_rows
-           if r.get("file") == rel
-           and r.get("status") in ("render_ready", "todo")
-           and (r.get("ko_text") or "").strip()]
-    specs = []
-    for r in sel:
-        try:
-            s = render.resolve(r, STYLES)
-        except render.SkipRow:
-            continue
-        s.flow = FLOWS.get(s.box_id)
-        specs.append(s)
-    if not specs:
-        raise RuntimeError("렌더할 행이 없습니다: " + rel)
-    posts = [p for p in DATA.get("post", []) if p.get("file") == rel]
-    out, _, _ = render.compose_file(PROJECT, rel, specs,
-                                    posts=posts or None, data=DATA)
+    def __init__(self, raw: bytes):                 # noqa: super().__init__ 안 함
+        self.rfile = io.BytesIO(raw)
+        self.wfile = io.BytesIO()
+        self.client_address = ("127.0.0.1", 0)
+        self.server = None
+        self.close_connection = True
+        self.raw_requestline = self.rfile.readline()
+        if not self.parse_request():
+            return
+        method = getattr(self, "do_" + self.command, None)
+        if method is None:
+            self.send_error(501)
+        else:
+            method()
 
-    grp = ledgermod.overlay_group_for(DATA, rel)
-    if grp and rel != grp[1]:
-        base_path = PROJECT.original_root / Path(*grp[1].split("/"))
-        if base_path.exists():
-            from PIL import Image
-            under = Image.open(base_path).convert("RGBA")
-            canvas = Image.new(
-                "RGBA",
-                (max(under.width, out.width), max(under.height, out.height)),
-                (0, 0, 0, 0))
-            canvas.alpha_composite(under)
-            canvas.alpha_composite(out)
-            out = canvas
 
-    buf = io.BytesIO()
-    out.save(buf, "PNG")
-    return buf.getvalue()
+def serve(method, target, body=None):
+    """(status, content_type, body_bytes) — target 은 경로+쿼리."""
+    payload = bytes(body) if body is not None else b""
+    head = (f"{method} {target} HTTP/1.1\r\n"
+            f"Host: local\r\n"
+            f"Content-Length: {len(payload)}\r\n"
+            f"Content-Type: application/json\r\n\r\n")
+    driver = Driver(head.encode("latin-1") + payload)
+    raw = driver.wfile.getvalue()
+    header_end = raw.find(b"\r\n\r\n")
+    if header_end < 0:
+        return 500, "text/plain", b"empty response"
+    head_lines = raw[:header_end].decode("latin-1").split("\r\n")
+    status = int(head_lines[0].split(" ", 2)[1])
+    ctype = "application/octet-stream"
+    for line in head_lines[1:]:
+        if line.lower().startswith("content-type:"):
+            ctype = line.split(":", 1)[1].strip()
+    return status, ctype, raw[header_end + 4:]
+
+
+def ledger_text():
+    """현재 원장 파일 내용 — 수정 후 localStorage 미러링용."""
+    return PROJECT.ledger_path.read_text(encoding="utf-8")
+
+
+def write_ledger(text):
+    """localStorage 에 미러링해 둔 원장을 복원한다 (부팅 시)."""
+    PROJECT.ledger_path.write_text(text, encoding="utf-8")

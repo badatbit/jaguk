@@ -4,20 +4,50 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jaguk 예제 — 풍우래기3 (風雨来記3)</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../_app/app.css">
+<style>
+body { margin: 0; background: #14161a; color: #d6dae2;
+       font: 14px/1.7 system-ui, sans-serif; display: flex;
+       align-items: center; justify-content: center; height: 100vh; }
+.card { max-width: 560px; padding: 28px 32px; background: #1d2026;
+        border: 1px solid #2c3038; border-radius: 10px; }
+h1 { font-size: 17px; margin: 0 0 8px; }
+p { color: #8a90a0; margin: 6px 0; }
+#st { color: #4da3ff; }
+a { color: #4da3ff; }
+</style>
 </head>
 <body>
+<div class="card">
+  <h1>jaguk GUI — 풍우래기3 (風雨来記3)</h1>
+  <p>로컬 <code>jaguk gui</code> 와 <b>같은 gui.html + gui.py</b> 를
+  브라우저(WebAssembly)에서 그대로 실행합니다. 원장 수정은 이 브라우저의
+  localStorage 에만 저장됩니다.</p>
+  <p>저장된 수정을 비우려면 <a href="?reset=1">?reset=1</a> 로 여세요.
+  OCR·erase 계열 기능은 브라우저 판에서 미지원.</p>
+  <p id="st">준비 중…</p>
+</div>
 <script>
-window.DEMO_SHELL = {
-  title: "jaguk 예제 — 풍우래기3",
-  sub: "브라우저에서 typelet 그대로 주입",
-  store: "furaiki3-demo",
-};
+(async () => {
+  const st = document.getElementById("st");
+  if (!("serviceWorker" in navigator)) {
+    st.textContent = "이 브라우저는 Service Worker 를 지원하지 않아 실행할 수 없습니다.";
+    return;
+  }
+  const root = location.pathname.replace(/index\.html$/, "");
+  if (new URLSearchParams(location.search).get("reset") === "1") {
+    try { localStorage.removeItem("jaguk-wasm-ledger:" + root); } catch (e) {}
+    st.textContent = "저장된 수정을 비웠습니다. GUI 로 이동…";
+  }
+  await navigator.serviceWorker.register("./sw.js");
+  await navigator.serviceWorker.ready;
+  if (!navigator.serviceWorker.controller)
+    await new Promise(r => navigator.serviceWorker
+      .addEventListener("controllerchange", r, {once: true}));
+  st.textContent = "GUI 로 이동…";
+  location.replace("./app/");
+})().catch(e => {
+  document.getElementById("st").textContent = "실패: " + (e && e.message || e);
+});
 </script>
-<script src="data.js"></script>
-<script src="../_app/app.js"></script>
 </body>
 </html>
