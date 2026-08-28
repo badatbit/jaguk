@@ -1,0 +1,19 @@
+{
+ "originals": "originals",
+ "data": ".",
+ "erased": "erased",
+ "injected": "injected",
+ "preview_root": "preview",
+ "font_root": "fonts",
+ "ledger": "lettering.json",
+ "fonts": {
+  "IBM Plex Sans KR/400": "IBMPlexSansKR-Text.otf",
+  "IBM Plex Sans KR/500": "IBMPlexSansKR-Medium.otf",
+  "IBM Plex Sans KR/600": "IBMPlexSansKR-SemiBold.otf",
+  "NexonFootballGothic/300": "NEXON Football Gothic L.otf",
+  "SchoolSafetySusukkang/400": "HakgyoansimSusukkangL.woff2",
+  "YeolrinMyeongjo/500": "YeolrinMyeongjo-Medium.woff",
+  "YeolrinMyeongjo/700": "YeolrinMyeongjo-Bold.woff"
+ },
+ "supersample": 4
+}

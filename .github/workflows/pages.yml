@@ -1,12 +1,14 @@
 # examples/ 를 GitHub Pages 사이트 루트로 배포한다 —
 # https://<user>.github.io/jaguk/furaiki3/ 처럼 examples 밑 디렉토리가
 # 그대로 URL 경로가 된다. (Settings → Pages → Source: GitHub Actions)
+# typelet/ 소스도 _typelet/ 로 같이 싣는다 — 예제의 주입 렌더는 별도
+# 구현이 아니라 이 소스를 Pyodide(wasm)로 그대로 실행한 것이다.
 name: pages
 
 on:
   push:
     branches: [main]
-    paths: ['examples/**', '.github/workflows/pages.yml']
+    paths: ['examples/**', 'typelet/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 permissions:
@@ -27,8 +29,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - name: Stage site (examples + typelet source)
+        run: |
+          mkdir -p _site
+          cp -r examples/. _site/
+          cp -r typelet _site/_typelet
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: examples
+          path: _site
       - id: deployment
         uses: actions/deploy-pages@v4

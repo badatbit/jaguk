@@ -1,0 +1,15 @@
+{
+ "originals": "originals",
+ "data": ".",
+ "erased": "erased",
+ "injected": "injected",
+ "preview_root": "preview",
+ "font_root": "fonts",
+ "ledger": "lettering.json",
+ "fonts": {
+  "IBM Plex Sans KR/400": "IBMPlexSansKR-Text.otf",
+  "IBM Plex Sans KR/500": "IBMPlexSansKR-Medium.otf",
+  "IBM Plex Sans KR/600": "IBMPlexSansKR-SemiBold.otf"
+ },
+ "supersample": 4
+}
