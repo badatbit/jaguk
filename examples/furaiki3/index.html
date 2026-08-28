@@ -6,8 +6,17 @@
 <title>jaguk 예제 — 풍우래기3 (風雨来記3)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
+/* 프로젝트 글꼴 — IBM Plex Sans KR 은 Google Fonts, 나머지는 번들 */
+@font-face { font-family: "NexonFootballGothic"; font-weight: 300;
+  src: url(fonts/NexonFootballGothicL.otf) format("opentype"); }
+@font-face { font-family: "SchoolSafetySusukkang"; font-weight: 400;
+  src: url(fonts/HakgyoansimSusukkangL.woff2) format("woff2"); }
+@font-face { font-family: "YeolrinMyeongjo"; font-weight: 500;
+  src: url(fonts/YeolrinMyeongjo-Medium.woff) format("woff"); }
+@font-face { font-family: "YeolrinMyeongjo"; font-weight: 700;
+  src: url(fonts/YeolrinMyeongjo-Bold.woff) format("woff"); }
 :root {
   --bg: #14161a; --panel: #1d2026; --line: #2c3038; --fg: #d6dae2;
   --muted: #8a90a0; --accent: #4da3ff;
@@ -22,7 +31,7 @@ header h1 { font-size: 14px; margin: 0 8px 0 0; font-weight: 600; }
 header h1 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
 .group { display: flex; gap: 4px; align-items: center; }
 .group .lab { color: var(--muted); margin-right: 2px; }
-button, select {
+button, select, input[type=search] {
   background: #262a32; color: var(--fg); border: 1px solid var(--line);
   border-radius: 4px; padding: 3px 10px; font: inherit; cursor: pointer;
 }
@@ -31,37 +40,54 @@ button:hover { border-color: #4a5060; }
 .swatch { width: 22px; height: 22px; padding: 0; border-radius: 4px; }
 .swatch.on { outline: 2px solid var(--accent); }
 main { display: flex; height: calc(100vh - 49px); }
+#files { width: 250px; border-right: 1px solid var(--line);
+         background: var(--panel); overflow-y: auto; flex-shrink: 0; }
+#files .head { padding: 8px 10px; border-bottom: 1px solid var(--line);
+               position: sticky; top: 0; background: var(--panel); z-index: 2; }
+#files .head input { width: 100%; cursor: text; }
+#files .count { color: var(--muted); font-size: 11px; margin-top: 4px; }
+#files details { border-bottom: 1px solid #23262d; }
+#files summary { padding: 5px 10px; cursor: pointer; color: var(--muted);
+                 font-size: 12px; user-select: none; }
+#files summary:hover { color: var(--fg); }
+#files .item { display: block; width: 100%; text-align: left; border: none;
+               background: none; border-radius: 0; padding: 3px 10px 3px 20px;
+               font-size: 12px; white-space: nowrap; overflow: hidden;
+               text-overflow: ellipsis; }
+#files .item.on { background: var(--accent); color: #fff; }
+#files .item .n { color: var(--muted); margin-left: 4px; }
+#files .item.on .n { color: #d8eaff; }
 #stage-wrap { flex: 1; overflow: auto; padding: 18px; }
 #stage { position: relative; width: max-content; }
 #stage canvas, #stage img { display: block; }
 #stage .layer { position: absolute; left: 0; top: 0; }
 .checker { background:
   repeating-conic-gradient(#3a3f48 0 25%, #2b2f37 0 50%) 0 0/16px 16px; }
-#side { width: 340px; border-left: 1px solid var(--line); background: var(--panel);
-        overflow-y: auto; }
+#side { width: 330px; border-left: 1px solid var(--line); background: var(--panel);
+        overflow-y: auto; flex-shrink: 0; }
 #side .head { padding: 10px 12px 6px; color: var(--muted);
-              border-bottom: 1px solid var(--line); }
+              border-bottom: 1px solid var(--line); word-break: break-all; }
 .row { padding: 7px 12px; border-bottom: 1px solid #23262d; }
 .row .id { color: var(--muted); font-size: 11px; }
 .row .jp { color: #b9bfd0; font-size: 12px; margin: 1px 0 3px; }
 .row input { width: 100%; background: #14161a; color: var(--fg);
              border: 1px solid var(--line); border-radius: 4px;
-             padding: 3px 7px; font: inherit; }
+             padding: 3px 7px; font: inherit; cursor: text; }
 .row input:focus { border-color: var(--accent); outline: none; }
 .row.edited input { border-color: #b8860b; }
 #note { padding: 10px 12px; color: var(--muted); font-size: 12px;
         border-top: 1px solid var(--line); }
 #note a { color: var(--accent); }
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   main { flex-direction: column; height: auto; }
-  #side { width: auto; border-left: none; border-top: 1px solid var(--line); }
+  #files, #side { width: auto; border: none; border-top: 1px solid var(--line); }
+  #files { max-height: 40vh; }
 }
 </style>
 </head>
 <body>
 <header>
   <h1>jaguk 예제 — 풍우래기3<small>브라우저에서 직접 글자 주입</small></h1>
-  <div class="group" id="fileButtons"><span class="lab">파일</span></div>
   <div class="group" id="viewButtons"><span class="lab">보기</span></div>
   <div class="group" id="bgButtons"><span class="lab">배경</span></div>
   <div class="group"><span class="lab">배율</span>
@@ -78,6 +104,13 @@ main { display: flex; height: calc(100vh - 49px); }
   </div>
 </header>
 <main>
+  <div id="files">
+    <div class="head">
+      <input type="search" id="filter" placeholder="파일 필터…">
+      <div class="count" id="fileCount"></div>
+    </div>
+    <div id="fileList"></div>
+  </div>
   <div id="stage-wrap"><div id="stage"></div></div>
   <div id="side">
     <div class="head" id="sideHead"></div>
@@ -98,31 +131,58 @@ main { display: flex; height: calc(100vh - 49px); }
 const DEMO = window.FURAIKI3_DEMO;
 const SS = DEMO.supersample || 4;
 const STORE = "furaiki3-demo-ko";          // 수정된 번역 — localStorage 전용
+const STATE = "furaiki3-demo-state";       // 화면 상태 (파일·보기·배경·배율)
 const SHADOW_RE = /drop_shadow\(dx=(-?\d+),dy=(-?\d+),blur=([0-9.]+)(?:,color=(#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?))?\)/g;
-const PLAIN_EFFECTS = new Set(["", "none", "hard_outline", "pixel_palette_estimate"]);
+const ROTATE_RE = /^rotate\(angle=(-?[0-9.]+)\)$/;
 const BGS = ["#3c5a82", "#14161a", "#ffffff", "checker"];
 
 let fileIdx = 0, view = "injected", bgIdx = 3, zoomMode = "fit", showBoxes = false;
-{ // URL 로 초기 상태 지정 — ?file=1&view=original&bg=0&zoom=2&boxes=1
+let edits = {};
+try { edits = JSON.parse(localStorage.getItem(STORE) || "{}"); } catch (e) {}
+try {
+  const s = JSON.parse(localStorage.getItem(STATE) || "null");
+  if (s) {
+    const i = DEMO.files.findIndex(f => f.rel === s.rel);
+    if (i >= 0) fileIdx = i;
+    if (["original", "erased", "injected"].includes(s.view)) view = s.view;
+    if (Number.isInteger(s.bgIdx) && s.bgIdx >= 0 && s.bgIdx <= 3) bgIdx = s.bgIdx;
+    if (["fit", "1", "2", "4"].includes(s.zoom)) zoomMode = s.zoom;
+    if (typeof s.boxes === "boolean") showBoxes = s.boxes;
+  }
+} catch (e) {}
+{ // URL 로 초기 상태 지정 — ?file=parts/parts&view=original&bg=0&zoom=2&boxes=1
   const q = new URLSearchParams(location.search);
-  const f = parseInt(q.get("file"), 10);
-  if (Number.isInteger(f) && f >= 0 && f < DEMO.files.length) fileIdx = f;
+  const f = q.get("file");
+  if (f !== null) {
+    const n = parseInt(f, 10);
+    if (Number.isInteger(n) && String(n) === f && n >= 0 && n < DEMO.files.length)
+      fileIdx = n;
+    else {
+      const i = DEMO.files.findIndex(x => x.rel.includes(f));
+      if (i >= 0) fileIdx = i;
+    }
+  }
   if (["original", "erased", "injected"].includes(q.get("view"))) view = q.get("view");
   const bg = parseInt(q.get("bg"), 10);
   if (Number.isInteger(bg) && bg >= 0 && bg <= 3) bgIdx = bg;
   if (["fit", "1", "2", "4"].includes(q.get("zoom"))) zoomMode = q.get("zoom");
   if (q.get("boxes") === "1") showBoxes = true;
 }
-let edits = {};
-try { edits = JSON.parse(localStorage.getItem(STORE) || "{}"); } catch (e) {}
 
 function saveEdits() {
   try { localStorage.setItem(STORE, JSON.stringify(edits)); } catch (e) {}
 }
+function saveState() {
+  try {
+    localStorage.setItem(STATE, JSON.stringify({
+      rel: DEMO.files[fileIdx].rel, view, bgIdx, zoom: zoomMode, boxes: showBoxes,
+    }));
+  } catch (e) {}
+}
 function koOf(row) { return edits[row.box_id] !== undefined ? edits[row.box_id] : row.text; }
 function rgba(c) { return `rgba(${c[0]},${c[1]},${c[2]},${(c[3] / 255).toFixed(3)})`; }
 
-// ---- 이미지 로드 ----
+// ---- 이미지·글꼴 로드 ----
 const imgCache = {};
 function loadImage(src) {
   if (imgCache[src]) return imgCache[src];
@@ -134,9 +194,23 @@ function loadImage(src) {
   });
   return imgCache[src];
 }
+const fontLoaded = new Set();
+async function ensureFonts(file) {
+  // CDN 글꼴은 unicode-range 서브셋이라, 쓸 글자를 미리 load 해야
+  // Canvas 측정이 폴백 글꼴로 새지 않는다.
+  const jobs = [];
+  for (const row of file.rows) {
+    const key = `${row.weight} 32px "${row.family}"`;
+    const text = koOf(row);
+    const k = key + "|" + text;
+    if (fontLoaded.has(k)) continue;
+    fontLoaded.add(k);
+    jobs.push(document.fonts.load(key, text + "가나다ABC0123"));
+  }
+  try { await Promise.all(jobs); } catch (e) { /* 오프라인 — 폴백 렌더 */ }
+}
 
-// ---- 글꼴 메트릭 (Python metric_bounds 대응: 어센트/디센트 기반) ----
-const probeCtx = document.createElement("canvas").getContext("2d");
+// ---- 글꼴 메트릭 (render.py metric_bounds 대응) ----
 function setFont(ctx, row, ss) {
   ctx.font = `${row.weight} ${row.size * ss}px "${row.family}"`;
 }
@@ -153,22 +227,29 @@ function penAndBaseline(box, align, adv, top, bottom) {
 }
 
 // ---- 그리기 (render.py 의 경로를 Canvas 2D 로 옮김) ----
-function drawPlain(ctx, x, y, row, ss, text) {
-  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
-  ctx.lineJoin = "round";
+function drawPlain(ctx, x, y, row, ss, text, inkOverride) {
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.lineJoin = "round";
   if (row.outline_w) {
-    ctx.strokeStyle = rgba(row.outline);
+    ctx.strokeStyle = inkOverride || rgba(row.outline);
     ctx.lineWidth = row.outline_w * ss * 2;   // 스트로크는 절반만 밖으로 나간다
     ctx.strokeText(text, x, y);
   }
-  ctx.fillStyle = rgba(row.fill);
+  ctx.fillStyle = inkOverride || rgba(row.fill);
   ctx.fillText(text, x, y);
 }
 
+let scratch = null;                          // drop_shadow 용 재사용 캔버스
+function scratchFor(ctx) {
+  if (!scratch) scratch = document.createElement("canvas");
+  if (scratch.width < ctx.canvas.width || scratch.height < ctx.canvas.height) {
+    scratch.width = ctx.canvas.width; scratch.height = ctx.canvas.height;
+  }
+  const c = scratch.getContext("2d");
+  c.clearRect(0, 0, scratch.width, scratch.height);
+  return c;
+}
 function drawShadow(ctx, x, y, row, ss, text, dx, dy, blur, color) {
-  const t = document.createElement("canvas");
-  t.width = ctx.canvas.width; t.height = ctx.canvas.height;
-  const tc = t.getContext("2d");
+  const tc = scratchFor(ctx);
   setFont(tc, row, ss);
   tc.textAlign = "left"; tc.textBaseline = "alphabetic"; tc.lineJoin = "round";
   tc.fillStyle = color; tc.strokeStyle = color;
@@ -179,10 +260,9 @@ function drawShadow(ctx, x, y, row, ss, text, dx, dy, blur, color) {
   tc.fillText(text, x + dx * ss, y + dy * ss);
   ctx.save();
   if (blur > 0) ctx.filter = `blur(${blur * ss}px)`;
-  ctx.drawImage(t, 0, 0);
+  ctx.drawImage(tc.canvas, 0, 0);
   ctx.restore();
 }
-
 function parseShadows(effect) {
   const out = [];
   for (const m of effect.matchAll(SHADOW_RE)) {
@@ -195,7 +275,6 @@ function parseShadows(effect) {
   }
   return out;
 }
-
 function drawEffected(ctx, x, y, row, ss, text) {
   for (const s of parseShadows(row.effect))
     drawShadow(ctx, x, y, row, ss, text, s.dx, s.dy, s.blur,
@@ -232,20 +311,94 @@ function drawVertical(ctx, row, ss, text) {
   }
 }
 
+function drawDistributed(ctx, row, ss, text) {
+  // 글자를 상자 폭에 균등 분배 — 첫 글자 잉크는 왼변, 끝 글자 잉크는 오른변
+  const chars = [...text].filter(c => !/\s/.test(c));
+  if (!chars.length) return;
+  const [bx, by, bw, bh] = row.box.map(v => v * ss);
+  const stroke = row.outline_w * ss;
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.lineJoin = "round";
+  const inks = chars.map(c => {
+    const m = ctx.measureText(c);
+    return {lsb: -m.actualBoundingBoxLeft - stroke,
+            w: m.actualBoundingBoxLeft + m.actualBoundingBoxRight + stroke * 2};
+  });
+  const [top, bottom] = metricBounds(ctx, stroke);
+  const v = row.align[1];
+  const base = v === "t" ? by - top : v === "b" ? by + bh - bottom
+             : by + bh / 2 - (top + bottom) / 2;
+  const total = inks.reduce((s, i) => s + i.w, 0);
+  const gap = chars.length > 1 ? (bw - total) / (chars.length - 1) : 0;
+  let cursor = bx;
+  chars.forEach((c, i) => {
+    const x = Math.round(cursor) - inks[i].lsb;
+    if (row.outline_w) {
+      ctx.strokeStyle = rgba(row.outline);
+      ctx.lineWidth = stroke * 2;
+      ctx.strokeText(c, x, base);
+    }
+    ctx.fillStyle = rgba(row.fill);
+    ctx.fillText(c, x, base);
+    cursor += inks[i].w + gap;
+  });
+}
+
+function drawFlow(ctx, row, ss, text) {
+  // 여러 줄 상자에 어절 단위 자동 줄바꿈 (draw_flow 이식)
+  const boxes = row.flow.map(b => b.map(v => v * ss));
+  const tokens = text.split(/\s+/).filter(t => t);
+  const lines = [];
+  let cur = "";
+  for (const tok of tokens) {
+    const trial = cur ? cur + " " + tok : tok;
+    const limit = boxes[Math.min(lines.length, boxes.length - 1)][2];
+    if (!cur || ctx.measureText(trial).width <= limit) cur = trial;
+    else { lines.push(cur); cur = tok; }
+  }
+  if (cur) lines.push(cur);
+  const [top, bottom] = metricBounds(ctx, row.outline_w * ss);
+  lines.slice(0, boxes.length).forEach((line, i) => {
+    const adv = ctx.measureText(line).width;
+    const [x, y] = penAndBaseline(boxes[i], row.align, adv, top, bottom);
+    drawEffected(ctx, x, y, row, ss, line);
+  });
+}
+
+function drawRotated(ctx, row, ss, text, angle) {
+  // 상자 중심을 축으로 회전 (draw_rotated 이식 — PIL 은 반시계가 +)
+  const m = ctx.measureText(text);
+  const stroke = row.outline_w * ss;
+  const pad = Math.max(4 * ss, stroke + 2 * ss);
+  const w = Math.ceil(m.actualBoundingBoxLeft + m.actualBoundingBoxRight) + stroke * 2 + pad * 2;
+  const h = Math.ceil(m.actualBoundingBoxAscent + m.actualBoundingBoxDescent) + stroke * 2 + pad * 2;
+  const t = document.createElement("canvas");
+  t.width = w; t.height = h;
+  const tc = t.getContext("2d");
+  setFont(tc, row, ss);
+  drawPlain(tc, pad + stroke + m.actualBoundingBoxLeft,
+            pad + stroke + m.actualBoundingBoxAscent, row, ss, text);
+  const [bx, by, bw, bh] = row.box.map(v => v * ss);
+  ctx.save();
+  ctx.translate(bx + bw / 2, by + bh / 2);
+  ctx.rotate(-angle * Math.PI / 180);
+  ctx.drawImage(t, -w / 2, -h / 2);
+  ctx.restore();
+}
+
 function drawSqueezed(ctx, row, ss, text, adv, top, bottom) {
   // 넘치는 텍스트를 상자 폭에 맞춰 가로만 압축 (draw_squeezed 이식)
-  const [bx, by, bw] = [row.box[0] * ss, row.box[1] * ss, row.box[2] * ss];
+  const [bx, , bw] = [row.box[0] * ss, 0, row.box[2] * ss];
   let s = bw / adv;
   if (row.squeeze_min) s = Math.max(s, row.squeeze_min);
   const outW = adv * s;
   const h = row.align[0];
   const left = h === "l" ? bx : h === "m" ? bx + (bw - outW) / 2 : bx + bw - outW;
   const t = document.createElement("canvas");
-  t.width = Math.ceil(adv) + row.size * ss * 2;
+  const pad = row.size * ss;
+  t.width = Math.ceil(adv) + pad * 2;
   t.height = ctx.canvas.height;
   const tc = t.getContext("2d");
   setFont(tc, row, ss);
-  const pad = row.size * ss;
   const wideBox = [bx, row.box[1] * ss, Math.ceil(adv), row.box[3] * ss];
   const [, y] = penAndBaseline(wideBox, row.align, adv, top, bottom);
   drawEffected(tc, pad, y, row, ss, text);
@@ -258,6 +411,10 @@ function renderRow(ctx, row, ss) {
   if (!text.trim()) return;
   setFont(ctx, row, ss);
   if (row.vertical) { drawVertical(ctx, row, ss, text); return; }
+  if (row.distribute) { drawDistributed(ctx, row, ss, text); return; }
+  if (row.flow) { drawFlow(ctx, row, ss, text); return; }
+  const rot = ROTATE_RE.exec(row.effect);
+  if (rot) { drawRotated(ctx, row, ss, text, parseFloat(rot[1])); return; }
   const [top, bottom] = metricBounds(ctx, row.outline_w * ss);
   const adv = ctx.measureText(text).width;
   const boxSS = row.box.map(v => v * ss);
@@ -269,32 +426,150 @@ function renderRow(ctx, row, ss) {
   drawEffected(ctx, x, y, row, ss, text);
 }
 
-// ---- 합성 ----
+function renderRun(ctx, members, ss) {
+  // 한 상자를 공유하는 run — 멤버를 제 스타일로 재서 이어 그린다
+  const parts = [];
+  let top = 1e9, bottom = -1e9, total = 0;
+  for (const m of members) {
+    setFont(ctx, m, ss);
+    const [t, b] = metricBounds(ctx, m.outline_w * ss);
+    const adv = ctx.measureText(koOf(m)).width;
+    parts.push([m, adv]);
+    top = Math.min(top, t); bottom = Math.max(bottom, b); total += adv;
+  }
+  const first = members[0];
+  const [x0, y] = penAndBaseline(first.box.map(v => v * ss), first.align,
+                                 total, top, bottom);
+  let x = x0;                                // 그림자 먼저 전부, 글자를 위에
+  for (const [m, adv] of parts) {
+    const shadows = parseShadows(m.effect);
+    if (shadows.length) {
+      setFont(ctx, m, ss);
+      for (const s of shadows)
+        drawShadow(ctx, x, y, m, ss, koOf(m), s.dx, s.dy, s.blur,
+                   s.color || rgba(m.outline));
+    }
+    x += adv;
+  }
+  x = x0;
+  for (const [m, adv] of parts) {
+    setFont(ctx, m, ss);
+    drawPlain(ctx, x, y, m, ss, koOf(m));
+    x += adv;
+  }
+}
+
+// ---- 파일 후처리 — post overlay (지도 도로 선화 등) ----
+async function applyPost(oc, posts) {
+  for (const p of posts) {
+    const im = await loadImage(p.layer);
+    const alpha = p.alpha === undefined ? 255 : p.alpha;
+    if (alpha === 255 && p.alpha_white == null) { oc.drawImage(im, 0, 0); continue; }
+    const t = document.createElement("canvas");
+    t.width = im.width; t.height = im.height;
+    const tc = t.getContext("2d");
+    tc.drawImage(im, 0, 0);
+    try {
+      const d = tc.getImageData(0, 0, t.width, t.height);
+      const px = d.data;
+      for (let i = 0; i < px.length; i += 4) {
+        const white = px[i] === 255 && px[i + 1] === 255 && px[i + 2] === 255;
+        const f = (white && p.alpha_white != null) ? p.alpha_white : alpha;
+        px[i + 3] = px[i + 3] * f / 255;
+      }
+      tc.putImageData(d, 0, 0);
+      oc.drawImage(t, 0, 0);
+    } catch (e) {                            // file:// 등 — 균일 알파로 근사
+      oc.save(); oc.globalAlpha = alpha / 255; oc.drawImage(im, 0, 0); oc.restore();
+    }
+  }
+}
+
+// ---- 합성 (compose_file 대응) ----
 async function composite(file) {
-  let w, h, baseImg = null;
+  let w, h, baseImg = null, origImg = null;
   if (file.base) {
     baseImg = await loadImage(file.base);
     w = baseImg.width; h = baseImg.height;
   } else {
     [w, h] = file.canvas;
   }
+  const acRows = file.rows.filter(r => r.ac && koOf(r).trim());
+  if (acRows.length) origImg = await loadImage(file.original);
+
+  const out = document.createElement("canvas");
+  out.width = w; out.height = h;
+  const oc = out.getContext("2d");
+  oc.imageSmoothingEnabled = true; oc.imageSmoothingQuality = "high";
+  if (baseImg) oc.drawImage(baseImg, 0, 0);
+  for (const r of acRows)                    // alpha_clear: crop 영역을 비운다
+    oc.clearRect(r.crop[0], r.crop[1], r.crop[2], r.crop[3]);
+
+  // rgb_ink — 알파 먹은 사본에 잉크 RGB 만: source-atop 이 알파를 보존한다
+  const inkRows = file.rows.filter(r => r.rgb_ink && koOf(r).trim());
+  if (inkRows.length) {
+    const layer = document.createElement("canvas");
+    layer.width = w * SS; layer.height = h * SS;
+    const lc = layer.getContext("2d");
+    for (const row of inkRows) {
+      const text = koOf(row);
+      setFont(lc, row, SS);
+      const f = row.fill[3] / 255;
+      const ink = `rgb(${Math.round(row.fill[0] * f)},${Math.round(row.fill[1] * f)},${Math.round(row.fill[2] * f)})`;
+      const [top, bottom] = metricBounds(lc, row.outline_w * SS);
+      const adv = lc.measureText(text).width;
+      const [x, y] = penAndBaseline(row.box.map(v => v * SS), row.align,
+                                    adv, top, bottom);
+      drawPlain(lc, x, y, row, SS, text, ink);
+    }
+    oc.save();
+    oc.globalCompositeOperation = "source-atop";
+    oc.drawImage(layer, 0, 0, w, h);
+    oc.restore();
+  }
+
   // 글자 레이어 — SS 배로 그려 한 번에 축소 (render.py 슈퍼샘플 규약)
   const layer = document.createElement("canvas");
   layer.width = w * SS; layer.height = h * SS;
   const lc = layer.getContext("2d");
-  for (const row of file.rows) renderRow(lc, row, SS);
-  const out = document.createElement("canvas");
-  out.width = w; out.height = h;
-  const oc = out.getContext("2d");
-  oc.imageSmoothingEnabled = true;
-  oc.imageSmoothingQuality = "high";
-  if (baseImg) oc.drawImage(baseImg, 0, 0);
+  const runs = new Map();
+  const tails = [];
+  for (const row of file.rows) {
+    if (row.rgb_ink) continue;
+    if (row.ac) {                            // alpha_clear: 색=fill 로 새긴다
+      const text = koOf(row);
+      if (!text.trim()) continue;
+      setFont(lc, row, SS);
+      const [top, bottom] = metricBounds(lc, row.outline_w * SS);
+      const adv = lc.measureText(text).width;
+      const [x, y] = penAndBaseline(row.box.map(v => v * SS), row.align,
+                                    adv, top, bottom);
+      drawPlain(lc, x, y, row, SS, text, rgba(row.fill));
+      if (row.ac.tail)
+        tails.push({row, inkRight: Math.round((x + adv) / SS)});
+      continue;
+    }
+    if (row.run) {
+      if (!runs.has(row.run)) runs.set(row.run, []);
+      runs.get(row.run).push(row);
+      continue;
+    }
+    renderRow(lc, row, SS);
+  }
+  for (const members of runs.values()) renderRun(lc, members, SS);
   oc.drawImage(layer, 0, 0, w, h);
+
+  for (const {row, inkRight} of tails) {     // alpha_clear 꼬리를 원본에서 이식
+    const [tx, ty, tw, th] = row.ac.tail;
+    oc.drawImage(origImg, tx, ty, tw, th,
+                 inkRight + 1 + row.ac.gap, row.crop[1], tw, th);
+  }
+  if (file.post) await applyPost(oc, file.post);
   return out;
 }
 
 // ---- 상자 오버레이 ----
-function drawBoxes(file, w, h) {
+function drawBoxesOverlay(file, w, h) {
   const cv = document.createElement("canvas");
   cv.width = w; cv.height = h;
   cv.className = "layer";
@@ -308,6 +583,11 @@ function drawBoxes(file, w, h) {
     }
     c.strokeStyle = "#39d98a";
     c.strokeRect(row.box[0] + .5, row.box[1] + .5, row.box[2] - 1, row.box[3] - 1);
+    if (row.flow) {
+      c.strokeStyle = "#e8b73c";
+      for (const b of row.flow)
+        c.strokeRect(b[0] + .5, b[1] + .5, b[2] - 1, b[3] - 1);
+    }
   }
   return cv;
 }
@@ -321,31 +601,38 @@ async function renderStage() {
   const seq = ++renderSeq;
   const file = DEMO.files[fileIdx];
   let el, w, h;
-  if (view === "original") {
-    const im = await loadImage(file.original);
-    w = im.width; h = im.height;
-    el = im.cloneNode();
-  } else if (view === "erased") {
-    if (file.base) {
-      const im = await loadImage(file.base);
+  try {
+    if (view === "original") {
+      const im = await loadImage(file.original);
       w = im.width; h = im.height;
       el = im.cloneNode();
-    } else {                                  // blank 베이스 — 투명 캔버스
-      [w, h] = file.canvas;
-      el = document.createElement("canvas");
-      el.width = w; el.height = h;
+    } else if (view === "erased") {
+      if (file.base) {
+        const im = await loadImage(file.base);
+        w = im.width; h = im.height;
+        el = im.cloneNode();
+      } else {                               // blank 베이스 — 투명 캔버스
+        [w, h] = file.canvas;
+        el = document.createElement("canvas");
+        el.width = w; el.height = h;
+      }
+    } else {
+      await ensureFonts(file);
+      el = await composite(file);
+      w = el.width; h = el.height;
     }
-  } else {
-    el = await composite(file);
-    w = el.width; h = el.height;
+  } catch (e) {
+    el = document.createElement("div");
+    el.textContent = "렌더 실패: " + e.message;
+    w = 400; h = 40;
   }
-  if (seq !== renderSeq) return;              // 그 사이 다른 렌더가 시작됨
+  if (seq !== renderSeq) return;             // 그 사이 다른 렌더가 시작됨
   stage.textContent = "";
   const bg = BGS[bgIdx];
   stage.className = bg === "checker" ? "checker" : "";
   stage.style.background = bg === "checker" ? "" : bg;
   stage.appendChild(el);
-  if (showBoxes) stage.appendChild(drawBoxes(file, w, h));
+  if (showBoxes) stage.appendChild(drawBoxesOverlay(file, w, h));
   applyZoom(w);
 }
 
@@ -368,6 +655,55 @@ function scheduleRender() {
   renderTimer = setTimeout(renderStage, 120);
 }
 
+// ---- 파일 목록 (디렉토리 그룹 + 필터) ----
+const openDirs = new Set();
+function renderFileList() {
+  const filter = document.getElementById("filter").value.trim().toLowerCase();
+  const list = document.getElementById("fileList");
+  list.textContent = "";
+  const groups = new Map();
+  DEMO.files.forEach((f, i) => {
+    if (filter && !f.rel.toLowerCase().includes(filter)) return;
+    const dir = f.rel.includes("/") ? f.rel.slice(0, f.rel.lastIndexOf("/")) : ".";
+    if (!groups.has(dir)) groups.set(dir, []);
+    groups.get(dir).push(i);
+  });
+  const curDir = DEMO.files[fileIdx].rel.includes("/")
+    ? DEMO.files[fileIdx].rel.slice(0, DEMO.files[fileIdx].rel.lastIndexOf("/")) : ".";
+  for (const [dir, idxs] of groups) {
+    const det = document.createElement("details");
+    det.open = !!filter || dir === curDir || openDirs.has(dir);
+    const sum = document.createElement("summary");
+    sum.textContent = `${dir} (${idxs.length})`;
+    det.appendChild(sum);
+    det.addEventListener("toggle", () => {
+      if (det.open) openDirs.add(dir); else openDirs.delete(dir);
+    });
+    for (const i of idxs) {
+      const f = DEMO.files[i];
+      const b = document.createElement("button");
+      b.className = "item" + (i === fileIdx ? " on" : "");
+      const name = f.rel.slice(f.rel.lastIndexOf("/") + 1);
+      b.textContent = name;
+      b.title = f.rel;
+      const n = document.createElement("span");
+      n.className = "n"; n.textContent = f.rows.length;
+      b.appendChild(n);
+      b.addEventListener("click", () => {
+        fileIdx = i; saveState();
+        renderFileList(); renderRowsPanel(); renderStage();
+      });
+      det.appendChild(b);
+    }
+    list.appendChild(det);
+  }
+  const totalRows = DEMO.files.reduce((s, f) => s + f.rows.length, 0);
+  document.getElementById("fileCount").textContent =
+    filter ? `${[...groups.values()].reduce((s, v) => s + v.length, 0)}개 일치`
+           : `${DEMO.files.length}개 파일 · ${totalRows}개 행`;
+}
+document.getElementById("filter").addEventListener("input", renderFileList);
+
 function renderRowsPanel() {
   const file = DEMO.files[fileIdx];
   document.getElementById("sideHead").textContent =
@@ -386,7 +722,7 @@ function renderRowsPanel() {
       if (input.value === row.text) delete edits[row.box_id];
       else edits[row.box_id] = input.value;
       div.classList.toggle("edited", edits[row.box_id] !== undefined);
-      saveEdits();                            // localStorage 전용 — 서버 기록 없음
+      saveEdits();                           // localStorage 전용 — 서버 기록 없음
       if (view !== "injected") { view = "injected"; renderViewButtons(); }
       scheduleRender();
     });
@@ -413,29 +749,24 @@ function makeButtons(holder, items, isOn, onClick) {
     holder.appendChild(b);
   });
 }
-function renderFileButtons() {
-  makeButtons(document.getElementById("fileButtons"),
-    DEMO.files.map(f => ({label: f.label})), i => i === fileIdx,
-    i => { fileIdx = i; renderRowsPanel(); renderStage(); renderFileButtons(); });
-}
 const VIEWS = [["original", "원본"], ["erased", "erased"], ["injected", "주입 (라이브)"]];
 function renderViewButtons() {
   makeButtons(document.getElementById("viewButtons"),
     VIEWS.map(v => ({label: v[1]})), i => VIEWS[i][0] === view,
-    i => { view = VIEWS[i][0]; renderViewButtons(); renderStage(); });
+    i => { view = VIEWS[i][0]; saveState(); renderViewButtons(); renderStage(); });
 }
 function renderBgButtons() {
   makeButtons(document.getElementById("bgButtons"),
     BGS.map(v => ({swatch: true, value: v, label: v})), i => i === bgIdx,
-    i => { bgIdx = i; renderBgButtons(); renderStage(); });
+    i => { bgIdx = i; saveState(); renderBgButtons(); renderStage(); });
 }
 document.getElementById("zoomSel").addEventListener("change", e => {
-  zoomMode = e.target.value; renderStage();
+  zoomMode = e.target.value; saveState(); renderStage();
 });
 document.getElementById("boxBtn").addEventListener("click", e => {
   showBoxes = !showBoxes;
   e.target.classList.toggle("on", showBoxes);
-  renderStage();
+  saveState(); renderStage();
 });
 document.getElementById("resetBtn").addEventListener("click", () => {
   edits = {};
@@ -444,20 +775,12 @@ document.getElementById("resetBtn").addEventListener("click", () => {
 });
 window.addEventListener("resize", () => { if (zoomMode === "fit") renderStage(); });
 
-// ---- 시작 — 글꼴을 먼저 로드해야 Canvas 측정이 맞는다 ----
-(async () => {
-  try {
-    await Promise.all([
-      document.fonts.load('400 32px "IBM Plex Sans KR"', "가나다ABC"),
-      document.fonts.load('600 32px "IBM Plex Sans KR"', "가나다ABC"),
-    ]);
-  } catch (e) { /* 오프라인 — 폴백 글꼴로 근사 렌더 */ }
-  renderFileButtons(); renderViewButtons(); renderBgButtons();
-  document.getElementById("boxBtn").classList.toggle("on", showBoxes);
-  document.getElementById("zoomSel").value = zoomMode;
-  renderRowsPanel();
-  renderStage();
-})();
+// ---- 시작 ----
+document.getElementById("boxBtn").classList.toggle("on", showBoxes);
+document.getElementById("zoomSel").value = zoomMode;
+renderViewButtons(); renderBgButtons();
+renderFileList(); renderRowsPanel();
+renderStage();
 </script>
 </body>
 </html>
