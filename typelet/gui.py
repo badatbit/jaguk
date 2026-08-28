@@ -52,8 +52,11 @@ def build_tree(project: Project) -> dict:
         catalogs.append({"name": cat["name"], "dir": cat.get("dir", ""),
                          "count": len(entries), "entries": entries})
     by_file: dict[str, int] = {}
+    ko_first: dict[str, str] = {}   # 파일별 첫 행 ko (텍스트 1개일 때 미리보기용)
     for row in ledgermod.rows(data):
-        by_file[row["file"]] = by_file.get(row["file"], 0) + 1
+        f = row["file"]
+        by_file[f] = by_file.get(f, 0) + 1
+        ko_first.setdefault(f, (row.get("ko") or row.get("ko_text") or "").strip())
     # 규칙(set) 경로 기준 그룹핑 — roadguidesign 434판 같은 무리가 트리에서
     # 접히는 그룹으로 보이게 (데이터 모델은 행 그대로, 표시만 묶는다)
     rules_map = data.get("rules", {})
@@ -81,13 +84,21 @@ def build_tree(project: Project) -> dict:
             if rel:
                 member_to_groups.setdefault(rel, []).append(name)
     overlay_names = {name for name, _, _ in overlay_defs}
+    # hide_base 규칙의 base 는 목록에서 숨긴다 — 텍스트 없는 순수 배경(예: 헛간
+    # 이름표의 BGHut.png). 합성에는 그대로 쓰이고 트리에만 안 보인다.
+    hidden_bases = {r["base"] for r in rules_map.values()
+                    if r.get("hide_base") and r.get("base")}
 
     grouped: dict[str, list] = {}
     loose = []
     for relative, count in sorted(by_file.items()):
+        if relative in hidden_bases:
+            continue
         # no-text 그룹은 텍스트가 없어 "완성" 판정을 erased(clean 판) 존재로 한다.
         entry = {"file": relative, "rows": count,
                  "erased": (project.base_root / relative).exists()}
+        if count == 1:                               # 텍스트 1개 → 미리보기 축약용
+            entry["text"] = ko_first.get(relative, "")
         gnames = member_to_groups.get(relative)
         if gnames:                                  # overlay 그룹 멤버/베이스
             for gname in gnames:
@@ -99,11 +110,14 @@ def build_tree(project: Project) -> dict:
             grouped.setdefault(rule_path, []).append(entry)
         else:
             loose.append(entry)
+    # 그룹 순서 = 원장(rules) 등장 순서. 가나다 정렬 아님(규칙에 적은 순서 유지).
+    order = {k: i for i, k in enumerate(rules_map)}
     groups = []
-    for path, entries in sorted(grouped.items()):
-        mode = ("overlay" if path in overlay_names
-                else ledgermod.rule_mode(rules_map.get(path, {})))
-        groups.append({"name": path, "mode": mode,
+    for path, entries in sorted(grouped.items(),
+                                key=lambda kv: (order.get(kv[0], 1 << 30), kv[0])):
+        rule = rules_map.get(path, {})
+        mode = "overlay" if path in overlay_names else ledgermod.rule_mode(rule)
+        groups.append({"name": path, "mode": mode, "cat": rule.get("cat", ""),
                        "count": len(entries), "files": entries})
     return {"catalogs": catalogs, "groups": groups, "files": loose,
             "rules": rules_map}
@@ -353,6 +367,27 @@ def style_update(project: Project, name: str, updates: dict) -> str:
     ledgermod.save(project, data)
     _INJECT_CACHE.clear()
     return f"{name}: " + ", ".join(changed)
+
+
+def group_rename(project: Project, old: str, new: str) -> str:
+    """규칙 그룹(오버레이/규칙 키) 이름 변경. dict 순서 유지 — 파일 참조는 경로
+    기반이라 키(이름)만 바뀌어도 안전하다."""
+    old = (old or "").strip()
+    new = (new or "").strip()
+    if not new:
+        raise ValueError("새 이름을 입력하세요")
+    data = ledgermod.load(project)
+    rules = data.get("rules", {})
+    if old not in rules:
+        raise ValueError(f"규칙에 없는 그룹: {old!r}")
+    if new == old:
+        return f"{old}: 변경 없음"
+    if new in rules:
+        raise ValueError(f"이미 있는 이름: {new!r}")
+    data["rules"] = {(new if k == old else k): v for k, v in rules.items()}
+    ledgermod.save(project, data)
+    _INJECT_CACHE.clear()
+    return f"{old} → {new}"
 
 
 def style_add(project: Project, name: str, base: str = "") -> str:
@@ -1226,6 +1261,10 @@ def make_handler(project: Project, config_path: Path | None = None):
                     body = self._body()
                     self._json({"log": style_add(
                         project, body.get("name", ""), body.get("base", ""))})
+                elif path == "/api/group/rename":
+                    body = self._body()
+                    self._json({"log": group_rename(
+                        project, body.get("old", ""), body.get("new", ""))})
                 else:
                     self.send_error(404)
             except ConnectionError:

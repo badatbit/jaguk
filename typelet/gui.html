@@ -39,6 +39,13 @@
   #tree .item .undecided { color: var(--dim); font-size: 10px;
                            border: 1px solid var(--dim); border-radius: 3px;
                            padding: 0 4px; }
+  #tree .folder { padding: 5px 10px; cursor: pointer; font-weight: bold;
+                  color: var(--accent); }
+  #tree .folder:hover { background: #262a33; }
+  #tree .fbody { padding-left: 8px; }
+  #tree .group .rename { color: var(--dim); cursor: pointer; padding: 0 3px; }
+  #tree .group .rename:hover { color: var(--accent); }
+  #tree .item .preview { color: var(--accent); font-size: 11px; }
   #tree .sect { padding: 8px 12px 2px; color: var(--dim); font-size: 11px;
                 text-transform: uppercase; letter-spacing: .08em; }
   #view { flex: 1; overflow: auto; padding: 24px;
@@ -126,6 +133,12 @@ function el(tag, cls, text) {
   if (text !== undefined) node.textContent = text;
   return node;
 }
+// 텍스트 1개 파일의 미리보기 축약: 전각공백 제거, 한글 5자 넘으면 …
+function abbrev(t) {
+  const s = (t || "").replace(/　/g, "").trim();
+  const c = [...s];
+  return c.length > 5 ? c.slice(0, 5).join("") + "…" : s;
+}
 
 async function loadTree() {
   const tree = await (await fetch("/api/tree")).json();
@@ -154,20 +167,31 @@ async function loadTree() {
   if ((tree.groups || []).length)
     nav.appendChild(el("div", "sect", "규칙 그룹"));
   const openFileName = detail && detail.file;   // 지금 열려 있는 파일
-  for (const g of tree.groups || []) {
+  // 그룹 하나(헤더 + 파일 목록)를 parent 에 그린다. 열려 있으면 true.
+  function renderGroup(g, parent) {
     const group = el("div", "group");
     group.dataset.group = g.name;
     group.appendChild(document.createTextNode(g.name + " "));
     group.appendChild(el("span", "n", `(${g.count} · ${g.mode})`));
-    // no-text 그룹(텍스트 없는 이미지)은 erased(clean 판)가 다 있으면 완료 —
-    // 다른 완료 항목처럼 마크 없음. erased 가 빠졌을 때만 미정으로 표시한다.
+    const ren = el("span", "rename", " ✎");
+    ren.title = "이름 변경";
+    ren.onclick = async (ev) => {
+      ev.stopPropagation();
+      const nn = prompt("새 그룹 이름:", g.name);
+      if (!nn || !nn.trim() || nn.trim() === g.name) return;
+      const r = await postOp("/api/group/rename", {old: g.name, new: nn.trim()});
+      if (!r.ok) { alert(r.log); return; }
+      if (currentGroup === g.name) currentGroup = nn.trim();
+      await loadTree();
+    };
+    group.appendChild(ren);
+    // no-text 그룹은 erased 가 다 있으면 완료(마크 없음), 빠졌을 때만 미정.
     if (g.mode === "no-text") {
       if (!g.files.every(f => f.erased))
         group.appendChild(el("span", "undecided", " 미정(erased 필요)"));
     } else if (g.files.every(f => f.rows === 0))
       group.appendChild(el("span", "undecided", " 미정"));
     const body = el("div");
-    // 지금 열린 파일이 속한 그룹은 강조 + 펼쳐 둔다
     const active = g.name === currentGroup;
     if (active) group.classList.add("active");
     body.style.display = active ? "" : "none";
@@ -175,21 +199,53 @@ async function loadTree() {
       body.style.display = body.style.display === "none" ? "" : "none";
     for (const f of g.files) {
       const item = el("div", "item", f.file.split("/").pop() + " ");
-      if (f.rows > 0) item.appendChild(document.createTextNode(`(${f.rows})`));
+      if (f.rows === 1 && f.text)
+        item.appendChild(el("span", "preview", abbrev(f.text)));
+      else if (f.rows > 0)
+        item.appendChild(document.createTextNode(`(${f.rows})`));
       item.dataset.file = f.file;
       item.dataset.group = g.name;    // 공유 base 가 어느 그룹으로 열릴지
       if (active && f.file === openFileName) item.classList.add("sel");
       item.onclick = () => openFile(f.file, item, g.name);
       body.appendChild(item);
     }
-    nav.appendChild(group);
-    nav.appendChild(body);
+    parent.appendChild(group);
+    parent.appendChild(body);
+    return active;
+  }
+  // 카테고리 폴더로 묶는다. 순서 = 지정 순서(가나다 아님).
+  // cat 이 없는 그룹(M05·헛간 이름표)은 폴더 없이 최상위(전도 위)에 그린다.
+  const CAT_ORDER = ["전도", "삿포로", "하코다테", "그외 지역"];
+  const byCat = {};
+  const topGroups = [];
+  for (const g of tree.groups || []) {
+    if (!g.cat) topGroups.push(g);
+    else (byCat[g.cat] ||= []).push(g);
+  }
+  for (const g of topGroups) renderGroup(g, nav);
+  const cats = CAT_ORDER.filter(c => byCat[c])
+    .concat(Object.keys(byCat).filter(c => !CAT_ORDER.includes(c)));
+  for (const c of cats) {
+    const folder = el("div", "folder");
+    folder.appendChild(document.createTextNode("▸ " + c + " "));
+    folder.appendChild(el("span", "n", `(${byCat[c].length})`));
+    const fbody = el("div", "fbody");
+    let anyActive = false;
+    for (const g of byCat[c]) if (renderGroup(g, fbody)) anyActive = true;
+    fbody.style.display = anyActive ? "" : "none";
+    folder.onclick = () =>
+      fbody.style.display = fbody.style.display === "none" ? "" : "none";
+    nav.appendChild(folder);
+    nav.appendChild(fbody);
   }
   if (tree.files.length) nav.appendChild(el("div", "sect", "파일 (행)"));
   for (const f of tree.files) {
     const item = el("div", "item", f.file + " ");
-    item.appendChild(f.rows === 0 ? el("span", "undecided", "미정")
-                                  : document.createTextNode(`(${f.rows})`));
+    if (f.rows === 1 && f.text)
+      item.appendChild(el("span", "preview", abbrev(f.text)));
+    else
+      item.appendChild(f.rows === 0 ? el("span", "undecided", "미정")
+                                    : document.createTextNode(`(${f.rows})`));
     item.dataset.file = f.file;
     item.style.paddingLeft = "12px";
     item.onclick = () => openFile(f.file, item);
