@@ -3,20 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>jaguk 예제 — 풍우래기3 (風雨来記3)</title>
+<title>jaguk 예제 — 북으로. White Illumination</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-/* 프로젝트 글꼴 — IBM Plex Sans KR 은 Google Fonts, 나머지는 번들 */
-@font-face { font-family: "NexonFootballGothic"; font-weight: 300;
-  src: url(fonts/NexonFootballGothicL.otf) format("opentype"); }
-@font-face { font-family: "SchoolSafetySusukkang"; font-weight: 400;
-  src: url(fonts/HakgyoansimSusukkangL.woff2) format("woff2"); }
-@font-face { font-family: "YeolrinMyeongjo"; font-weight: 500;
-  src: url(fonts/YeolrinMyeongjo-Medium.woff) format("woff"); }
-@font-face { font-family: "YeolrinMyeongjo"; font-weight: 700;
-  src: url(fonts/YeolrinMyeongjo-Bold.woff) format("woff"); }
 :root {
   --bg: #14161a; --panel: #1d2026; --line: #2c3038; --fg: #d6dae2;
   --muted: #8a90a0; --accent: #4da3ff;
@@ -87,7 +78,7 @@ main { display: flex; height: calc(100vh - 49px); }
 </head>
 <body>
 <header>
-  <h1>jaguk 예제 — 풍우래기3<small>브라우저에서 직접 글자 주입</small></h1>
+  <h1>jaguk 예제 — 북으로. White Illumination<small>브라우저에서 직접 글자 주입</small></h1>
   <div class="group" id="viewButtons"><span class="lab">보기</span></div>
   <div class="group" id="bgButtons"><span class="lab">배경</span></div>
   <div class="group"><span class="lab">배율</span>
@@ -128,10 +119,10 @@ main { display: flex; height: calc(100vh - 49px); }
 <script src="data.js"></script>
 <script>
 "use strict";
-const DEMO = window.FURAIKI3_DEMO;
+const DEMO = window.KITAE_DEMO;
 const SS = DEMO.supersample || 4;
-const STORE = "furaiki3-demo-ko";          // 수정된 번역 — localStorage 전용
-const STATE = "furaiki3-demo-state";       // 화면 상태 (파일·보기·배경·배율)
+const STORE = "kitae-demo-ko";          // 수정된 번역 — localStorage 전용
+const STATE = "kitae-demo-state";       // 화면 상태 (파일·보기·배경·배율)
 const SHADOW_RE = /drop_shadow\(dx=(-?\d+),dy=(-?\d+),blur=([0-9.]+)(?:,color=(#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?))?\)/g;
 const ROTATE_RE = /^rotate\(angle=(-?[0-9.]+)\)$/;
 const BGS = ["#3c5a82", "#14161a", "#ffffff", "checker"];
