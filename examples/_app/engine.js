@@ -10,13 +10,41 @@ const MODULES = ["__init__.py", "cli.py", "config.py", "erase.py", "fonts.py",
 let py = null, serveFn = null, ledgerFn = null;
 let ready = false;
 const queue = [];
+let fileCache = null;                        // 읽어온 파일의 브라우저 캐시
 
 function post(msg, transfer) { self.postMessage(msg, transfer || []); }
 
-async function fetchBin(url) {
-  const r = await fetch(url);
+// 읽어온 파일(원장·글꼴·이미지)은 Cache Storage 에 빌드 버전 키로 저장한다
+// — 재방문 시 재다운로드 없음, 새 버전 배포 시 옛 캐시는 자동 삭제.
+// (localStorage 는 용량(수 MB)이 작아 이미지 트리를 담을 수 없다.)
+async function setupCache(base, version) {
+  try {
+    const prefix = "jaguk-files:" + base + ":";
+    const current = prefix + (version || "dev");
+    for (const name of await caches.keys())
+      if (name.startsWith(prefix) && name !== current) await caches.delete(name);
+    fileCache = await caches.open(current);
+    const metaUrl = new URL(base + "__cache_meta__", self.location.href).href;
+    if (!(await fileCache.match(metaUrl)))
+      await fileCache.put(metaUrl, new Response(JSON.stringify(
+        {version: version || "dev", cachedAt: new Date().toISOString()})));
+  } catch (e) { fileCache = null; /* 캐시 불가 환경 — 매번 받는다 */ }
+}
+
+async function fetchBin(url, opts) {
+  const cacheable = fileCache && !(opts && opts.noStore);
+  if (cacheable) {
+    const hit = await fileCache.match(url);
+    if (hit) return new Uint8Array(await hit.arrayBuffer());
+  }
+  const r = await fetch(url, opts && opts.revalidate ? {cache: "no-cache"} : undefined);
   if (!r.ok) throw new Error("로드 실패: " + url);
-  return new Uint8Array(await r.arrayBuffer());
+  const buf = await r.arrayBuffer();
+  if (cacheable) {
+    try { await fileCache.put(url, new Response(buf.slice(0))); }
+    catch (e) { /* 저장 실패(용량 등) — 무시 */ }
+  }
+  return new Uint8Array(buf);
 }
 
 function writeFile(path, bytes) {
@@ -27,6 +55,7 @@ function writeFile(path, bytes) {
 async function init(msg) {
   const base = msg.base;                       // 예제 루트 절대경로 ('/kitae/' 등)
   const manifest = msg.manifest;
+  await setupCache(base, manifest && manifest.version);
   post({type: "status", text: "Pyodide 로딩…"});
   importScripts(PYODIDE_URL);
   py = await loadPyodide();
@@ -43,7 +72,9 @@ async function init(msg) {
   }
   if (!srcBase) throw new Error("typelet 소스를 찾을 수 없습니다");
   for (const m of MODULES) {
-    try { writeFile("/lib/typelet/" + m, await fetchBin(srcBase + m)); }
+    // typelet 소스는 캐시하지 않고 재검증한다 — 커밋만으로도 바뀐다
+    try { writeFile("/lib/typelet/" + m,
+                    await fetchBin(srcBase + m, {noStore: true, revalidate: true})); }
     catch (e) { /* 선택 모듈이 없어도 계속 (예: ocr) */ }
   }
 
@@ -86,7 +117,8 @@ async function init(msg) {
   await Promise.all(workers);
 
   post({type: "status", text: "jaguk GUI 핸들러 기동…"});
-  const glue = await (await fetch(base + "../_app/glue.py")).text();
+  const glue = await (await fetch(base + "../_app/glue.py",
+                                  {cache: "no-cache"})).text();
   py.runPython(glue);
   serveFn = py.globals.get("serve");
   ledgerFn = py.globals.get("ledger_text");

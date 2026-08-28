@@ -54,7 +54,12 @@
       if (currentPort)
         currentPort.postMessage(m, m.body ? [m.body.buffer] : []);
     } else if (m.type === "ledger") {
-      try { localStorage.setItem(storeKey, m.text); } catch (err) { /* 포기 */ }
+      // 원장 미러 — 저장 시각·빌드 버전을 봉투로 함께 남긴다
+      try {
+        localStorage.setItem(storeKey, JSON.stringify(
+          {version: window.__jagukVersion || "dev",
+           savedAt: new Date().toISOString(), text: m.text}));
+      } catch (err) { /* 용량 초과 등 — 포기 */ }
     }
   };
 
@@ -64,11 +69,22 @@
   makePort();
 
   (async () => {
-    const text = await (await fetch(root + "data.js")).text();
+    // data.js 는 재검증해 현재 빌드 버전을 안다 — 파일 캐시 무효화 기준
+    const text = await (await fetch(root + "data.js",
+                                    {cache: "no-cache"})).text();
     const shim = {};
     new Function("window", text)(shim);        // window.DEMO_DATA 추출
+    window.__jagukVersion = (shim.DEMO_DATA || {}).version || "dev";
     let saved = null;
-    try { saved = localStorage.getItem(storeKey); } catch (e) { /* 없음 */ }
+    try {
+      const raw = localStorage.getItem(storeKey);
+      if (raw) {
+        try {
+          const env = JSON.parse(raw);
+          saved = env && typeof env.text === "string" ? env.text : raw;
+        } catch (e) { saved = raw; }           // 구 형식(원장 원문 그대로)
+      }
+    } catch (e) { /* 없음 */ }
     worker.postMessage({type: "init", base: root,
                         manifest: shim.DEMO_DATA, saved});
   })().catch(e => setStat("부팅 실패: " + (e && e.message || e)));

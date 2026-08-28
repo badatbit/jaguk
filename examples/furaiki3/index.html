@@ -12,6 +12,7 @@ body { margin: 0; background: #14161a; color: #d6dae2;
         border: 1px solid #2c3038; border-radius: 10px; }
 h1 { font-size: 17px; margin: 0 0 8px; }
 p { color: #8a90a0; margin: 6px 0; }
+#info { color: #9aa3b5; font-size: 13px; }
 #st { color: #4da3ff; }
 a { color: #4da3ff; }
 </style>
@@ -21,22 +22,69 @@ a { color: #4da3ff; }
   <h1>jaguk GUI — 풍우래기3 (風雨来記3)</h1>
   <p>로컬 <code>jaguk gui</code> 와 <b>같은 gui.html + gui.py</b> 를
   브라우저(WebAssembly)에서 그대로 실행합니다. 원장 수정은 이 브라우저의
-  localStorage 에만 저장됩니다.</p>
-  <p>저장된 수정을 비우려면 <a href="?reset=1">?reset=1</a> 로 여세요.
-  OCR·erase 계열 기능은 브라우저 판에서 미지원.</p>
+  localStorage 에(저장 시각·버전 포함), 읽어온 파일(원장·글꼴·이미지)은
+  빌드 버전 키의 브라우저 캐시에 저장됩니다.</p>
+  <p><a href="?stay=1">?stay=1</a> 저장 상태 보기 ·
+  <a href="?reset=1">?reset=1</a> 원장 수정 비우기 ·
+  <a href="?purge=1">?purge=1</a> 파일 캐시 비우기.
+  OCR·erase 계열 기능은 브라우저 판 미지원.</p>
+  <div id="info"></div>
   <p id="st">준비 중…</p>
 </div>
 <script>
 (async () => {
   const st = document.getElementById("st");
+  const info = document.getElementById("info");
   if (!("serviceWorker" in navigator)) {
     st.textContent = "이 브라우저는 Service Worker 를 지원하지 않아 실행할 수 없습니다.";
     return;
   }
   const root = location.pathname.replace(/index\.html$/, "");
-  if (new URLSearchParams(location.search).get("reset") === "1") {
-    try { localStorage.removeItem("jaguk-wasm-ledger:" + root); } catch (e) {}
-    st.textContent = "저장된 수정을 비웠습니다. GUI 로 이동…";
+  const q = new URLSearchParams(location.search);
+  const ledgerKey = "jaguk-wasm-ledger:" + root;
+  const cachePrefix = "jaguk-files:" + root + ":";
+
+  if (q.get("reset") === "1") {
+    try { localStorage.removeItem(ledgerKey); } catch (e) {}
+    info.textContent = "저장된 원장 수정을 비웠습니다.";
+  }
+  if (q.get("purge") === "1") {
+    for (const n of await caches.keys())
+      if (n.startsWith(cachePrefix)) await caches.delete(n);
+    info.textContent += " 파일 캐시를 비웠습니다.";
+  }
+
+  const lines = [];
+  try {
+    const raw = localStorage.getItem(ledgerKey);
+    if (raw) {
+      let env = null;
+      try { env = JSON.parse(raw); } catch (e) {}
+      const size = Math.round(raw.length / 1024);
+      lines.push(env && env.savedAt
+        ? `원장 수정 저장: ${env.savedAt} · 버전 ${env.version} · ${size}KB`
+        : `원장 수정 저장: (구 형식) · ${size}KB`);
+    } else lines.push("저장된 원장 수정 없음");
+    for (const n of await caches.keys()) {
+      if (!n.startsWith(cachePrefix)) continue;
+      const c = await caches.open(n);
+      const meta = await c.match(new URL(root + "__cache_meta__",
+                                         location.href).href);
+      const count = (await c.keys()).length;
+      if (meta) {
+        const j = await meta.json();
+        lines.push(`파일 캐시: 버전 ${j.version} · ${j.cachedAt} · ${count}개`);
+      } else lines.push(`파일 캐시: ${n.slice(cachePrefix.length)} · ${count}개`);
+    }
+  } catch (e) { /* 표시만 생략 */ }
+  if (lines.length) info.innerHTML +=
+    (info.textContent ? "<br>" : "") + lines.join("<br>");
+
+  if (q.get("stay") === "1") {
+    st.innerHTML = '<a href="./app/">GUI 열기 →</a>';
+    if (navigator.serviceWorker)
+      navigator.serviceWorker.register("./sw.js").catch(() => {});
+    return;
   }
   await navigator.serviceWorker.register("./sw.js");
   await navigator.serviceWorker.ready;
