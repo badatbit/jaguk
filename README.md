@@ -9,9 +9,9 @@ CLI 는 둘이다:
 - **`typelet`** — 저수준 파이프라인 CLI (원장을 직접 다룰 때).
 
 실제 프로젝트 데이터로 결과를 바로 볼 수 있는 **브라우저 데모**가
-[examples/](examples/)에 있다 — 서버 없이 정적으로 동작하고, GitHub Pages
-로 `…/jaguk/furaiki3/` 처럼 서빙된다 (워크플로가 examples/ 를 사이트
-루트로 배포한다). 예: [풍우래기3](examples/furaiki3/).
+[examples/](examples/)에 있다 — 렌더는 typelet 을 Pyodide(wasm)로 그대로
+실행하고, GitHub Pages 로 `…/jaguk/furaiki3/` · `…/jaguk/kitae/` 에
+서빙된다. 소개와 조작법은 [EXAMPLE.md](EXAMPLE.md).
 
 ## jaguk — 통합 워크플로
 
