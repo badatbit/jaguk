@@ -2,8 +2,11 @@
 
 [examples/](examples/)에는 실제 한국어 패치 프로젝트의 원장(레저) 데이터로
 **jaguk GUI 를 브라우저 단독으로 실행**하는 정적 데모 두 개가 있다.
-서버 없이 동작하고, GitHub Pages 로 `…/jaguk/furaiki3/` ·
-`…/jaguk/kitae/` 에 서빙된다 (진입점 `…/jaguk/`).
+서버 없이 동작하고, GitHub Pages 로 서빙된다:
+
+- 풍우래기3: <https://badatbit.github.io/jaguk/furaiki3/>
+- 북으로: <https://badatbit.github.io/jaguk/kitae/>
+- 목록(진입점): <https://badatbit.github.io/jaguk/>
 
 핵심은 **별도 구현이 하나도 없다**는 것이다. 데모는 로컬 `jaguk gui` 가
 쓰는 바로 그 [gui.html](typelet/gui.html) 을 그대로 띄우고, 서버 쪽
