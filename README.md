@@ -49,6 +49,28 @@ jaguk status
   text-only 묶음(base 불필요) / `--row N ref|replace`(+`--multicolumn`) = ref 줄은
   원문 유지·번역 키·앵커, replace 줄은 지우고 그 자리에 주입 (안내판 꼴) /
   `--ignore` = 제외. 규칙 없는 파일은 auto(행 씨앗).
+- `mode: "no-text"` = **지우기 전용**. 대응 한글이 없어 원장에 행을 두지 않는다
+  (미완 레이블은 지워져 여기로 온다). 그 멤버의 최종 이미지는 **injected = erased**
+  (일본어만 없앤 판)이다 — GUI 미리보기도, 프로그램 compose 도 똑같이 그렇게 준다.
+  `"M05"`·`"M08"` 처럼 컨테이너/접두를 키로 잡으면 그 아래 전부가 지우기 전용이
+  되고, 그 중 한글 행이 있는 멤버(overlay 등)는 행이 우선한다.
+- `mode: "overlay"` = base 판 위에 멤버(pic)별로 한글을 얹는 논리 그룹
+  (`members` 목록·`base`·같은 좌표 슬롯). 멤버 소속은 접두 규칙보다 먼저 본다.
+
+### 프로그램 compose 계약 (게임 주입기 등 외부 소비자용)
+
+`typelet` 을 라이브러리로 열어 멤버별 최종 이미지를 받을 때(예: 게임 리소스
+주입)의 계약은 다음과 같다. 소비자는 텍스트가 있었는지 몰라도 된다 — 규칙이
+정하고 compose 가 최종 이미지를 돌려준다:
+
+| 상황 | 돌려주는 이미지 |
+|---|---|
+| 한글 행 있음(overlay/text-only/rows) | erased + 한글 합성 (`injected/`) |
+| `no-text` 이고 erased 존재 | erased 그대로 (일본어만 없앤 판) |
+| `ignore`·auto·번역 대기(행만 있고 ko 빈) | 없음(원본 유지) |
+
+판정은 `ledger.match_rule`(접두/정확 경로) + `ledger.rule_mode`, overlay 소속은
+`ledger.overlay_group_for` 로 한다.
 - OCR 교정 사전(`ocr-dict`): 알려진 원문 어휘(.txt 한 줄 하나, 또는 용어표
   파일의 원문 키)와 유사도 ≥ `ocr_dict_min`(기본 0.7)이면 스냅 교정한다.
   원문 OCR 값은 `"ocr"` 필드에 남는다 (スウェーテン→スウェーデン).
