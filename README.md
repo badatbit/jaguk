@@ -145,6 +145,10 @@ effect, text_align, …}`. 상세는 [typelet/ledger.py](typelet/ledger.py) 도�
   두면 행에는 **crop 위치 [x,y]만** 남는다 — crop 크기는 스타일이, text 상자는
   crop+pad 파생 (예: 15×3 메뉴 그리드 45행이 위치 2개 값씩만 가진다).
 - `status` 가 `render_ready` 인 행만 렌더된다. OCR 씨앗 행은 `todo` 로 들어온다.
+- 스타일 `letter_spacing_px` = **자간**. 글자 *사이*마다 이만큼 px 을 더한다(끝
+  글자 뒤에는 안 붙어서 가운데·오른쪽 정렬이 그대로 맞는다). 음수면 좁아진다.
+  자간이 있으면 글자를 하나씩 그리므로 커닝 쌍은 안 먹는다. 세로쓰기(글자 피치는
+  `line_height`)·균등분배(자간을 상자 폭에서 역산)와는 같이 못 쓴다 — 오류로 막는다.
 - 렌더러 기능: run(한 상자 여러 스타일 이어 그리기), flow(어절 단위 자동
   줄바꿈), 세로쓰기, 균등 분배, drop_shadow / rotate / italic(전단) 효과,
   슈퍼샘플 AA(설정 `supersample`, 기본 4·1=끔), alpha_clear · rgb_ink(알파 구운 스프라이트 직접 기록),

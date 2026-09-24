@@ -106,6 +106,7 @@ class RowSpec:
     overflow: str = ""                      # "squeeze" = 넘치면 가로만 압축
     squeeze_min: float = 0.0                # squeeze 하한 — 그 이상은 넘치게 둔다
     line_height: float = 0.0                # 세로쓰기 글자 피치 = size×배수 (0=기본)
+    tracking: float = 0.0                   # 자간 — 글자 **사이**에 더할 px (음수=좁힘)
     angle: float = 0.0                      # 상자별 틸트(회전) 각도 (도, 반시계+)
     matte: tuple | None = None              # 배경색RGB(1색) — 스타일 matte
     matte_th: int | None = None             # matte 테두리 임계값 — 알파 급변 가장자리를 matte색으로
@@ -278,6 +279,17 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
     if line_height < 0:
         raise ValueError(f"{box_id}: line_height 는 0 이상이어야 합니다")
 
+    # letter_spacing_px — 자간. 글자 **사이**마다 이만큼 px 을 더한다(끝 글자 뒤에는
+    # 안 붙어서 가운데·오른쪽 정렬이 그대로 맞는다). 음수면 좁아진다. CSS letter-spacing
+    # 과 같은 뜻이지만 단위가 px 고정이다. 자간이 있으면 글자를 하나씩 그리므로 커닝
+    # 쌍은 적용되지 않는다 — 자간을 직접 준 이상 그게 의도다.
+    # 세로쓰기는 글자 피치가 line_height 고, 균등분배는 자간을 상자 폭에서 역산하므로
+    # 둘 다 이 값과 겹친다 — 같이 쓰면 조용히 무시되는 대신 오류로 알린다.
+    tracking = float(style.get("letter_spacing_px") or 0)
+    if tracking and (vertical or distribute):
+        raise ValueError(
+            f"{box_id}: letter_spacing_px 는 세로쓰기/균등분배와 함께 쓸 수 없습니다")
+
     # angle — 상자별 틸트(회전). 행에 저장(스타일 아님). GUI 회전 핸들이 쓴다.
     angle = float(row.get("angle") or 0)
 
@@ -325,6 +337,7 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
         overflow=overflow,
         squeeze_min=squeeze_min,
         line_height=line_height,
+        tracking=tracking,
         angle=angle,
         matte=matte,
         matte_th=matte_th,
@@ -334,8 +347,29 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
 _PROBE = ImageDraw.Draw(Image.new("L", (1, 1), 0))
 
 
-def advance(text: str, font: ImageFont.FreeTypeFont) -> float:
-    return _PROBE.textlength(text, font=font)
+def advance(text: str, font: ImageFont.FreeTypeFont,
+            tracking: float = 0.0) -> float:
+    """문자열의 펜 전진폭. tracking(자간)은 **글자 사이**에만 더한다 — 끝 글자
+    뒤에는 안 붙여야 가운데·오른쪽 정렬이 그대로 맞는다."""
+    width = _PROBE.textlength(text, font=font)
+    if tracking and len(text) > 1:
+        width += tracking * (len(text) - 1)
+    return width
+
+
+def draw_text(draw: ImageDraw.ImageDraw, xy, text: str,
+              font: ImageFont.FreeTypeFont, tracking: float = 0.0, **kw) -> None:
+    """ImageDraw.text 래퍼 — tracking 이 0 이면 예전과 똑같이 한 번에 그린다.
+
+    0 이 아니면 글자마다 펜을 (그 글자 폭 + tracking) 만큼 밀며 하나씩 그린다.
+    `advance(..., tracking)` 과 같은 폭이 나오도록 **끝 글자 뒤에는 안 민다**."""
+    if not tracking or len(text) <= 1:
+        draw.text(xy, text, font=font, **kw)
+        return
+    x, y = xy
+    for ch in text:
+        draw.text((round(x), y), ch, font=font, **kw)
+        x += _PROBE.textlength(ch, font=font) + tracking
 
 
 def _scale_effect(effect: str, s: int) -> str:
@@ -370,6 +404,7 @@ def scale_spec(spec: RowSpec, s: int) -> RowSpec:
         effect=_scale_effect(spec.effect, s),
         flow=[[v * s for v in b] for b in spec.flow] if spec.flow else None,
         ss=spec.ss * s,
+        tracking=spec.tracking * s,
     )
 
 
@@ -423,10 +458,12 @@ def text_mask(
     """전체 캔버스 좌표의 글자 마스크. slant 는 baseline 을 축으로 전단한다."""
     position = snap(position)
     mask = Image.new("L", size, 0)
-    ImageDraw.Draw(mask).text(
+    draw_text(
+        ImageDraw.Draw(mask),
         position,
         spec.text,
-        font=font,
+        font,
+        spec.tracking,
         fill=255,
         anchor="ls",
         stroke_width=spec.outline_w,
@@ -464,10 +501,12 @@ def draw_plain(
         # 반투명 fill 은 stamp 로 확실히 알파 합성 — 뒤 무늬가 비친다.
         stamp(layer, text_mask(layer.size, position, spec, font), spec.fill)
         return
-    ImageDraw.Draw(layer).text(
+    draw_text(
+        ImageDraw.Draw(layer),
         snap(position),
         spec.text,
-        font=font,
+        font,
+        spec.tracking,
         fill=spec.fill,
         anchor="ls",
         stroke_width=spec.outline_w,
@@ -503,13 +542,16 @@ def draw_rotated(
     bbox = _PROBE.textbbox((0, 0), spec.text, font=font,
                            stroke_width=spec.outline_w)
     padding = max(4, spec.outline_w + 2)
-    width = bbox[2] - bbox[0] + padding * 2
+    extra = spec.tracking * (len(spec.text) - 1) if len(spec.text) > 1 else 0
+    width = max(1, round(bbox[2] - bbox[0] + padding * 2 + extra))
     height = bbox[3] - bbox[1] + padding * 2
     local = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    ImageDraw.Draw(local).text(
+    draw_text(
+        ImageDraw.Draw(local),
         (padding - bbox[0], padding - bbox[1]),
         spec.text,
-        font=font,
+        font,
+        spec.tracking,
         fill=spec.fill,
         stroke_width=spec.outline_w,
         stroke_fill=spec.outline if spec.outline_w else None,
@@ -585,7 +627,7 @@ def draw_alpha_clear(
     # 번역 글자판 (전체 캔버스 좌표로 그린 뒤 crop 영역만 쓴다) — 마스크는 SS 배
     font = fonts.get(spec)
     top, bottom = metric_bounds(font, spec.outline_w)
-    adv = advance(spec.text, font)
+    adv = advance(spec.text, font, spec.tracking)
     x, y = pen_and_baseline(spec.box, spec.align, adv, top, bottom)
     glyph_mask = text_mask_ss(image.size, (x, y), spec, fonts)
     glyph_region = glyph_mask.crop(crop_box)
@@ -647,7 +689,7 @@ def draw_rgb_ink(
     ink = tuple(int(c * f) for c in spec.fill[:3])
     font = fonts.get(spec)
     top, bottom = metric_bounds(font, spec.outline_w)
-    adv = advance(spec.text, font)
+    adv = advance(spec.text, font, spec.tracking)
     position = pen_and_baseline(spec.box, spec.align, adv, top, bottom)
     mask = text_mask_ss(image.size, position, spec, fonts)
     red, green, blue, alpha = image.split()
@@ -764,7 +806,8 @@ def draw_flow(layer: Image.Image, spec: RowSpec,
     cur = ""
     for tok in tokens:
         trial = (cur + " " + tok) if cur else tok
-        if not cur or advance(trial, font) <= boxes[min(len(lines), len(boxes) - 1)][2]:
+        if not cur or advance(trial, font, spec.tracking) <= boxes[
+                min(len(lines), len(boxes) - 1)][2]:
             cur = trial
         else:
             lines.append(cur)
@@ -778,11 +821,12 @@ def draw_flow(layer: Image.Image, spec: RowSpec,
     d = ImageDraw.Draw(layer)
     top, bottom = metric_bounds(font, spec.outline_w)
     for line, box in zip(lines, boxes):
-        adv = advance(line, font)
+        adv = advance(line, font, spec.tracking)
         position = pen_and_baseline(tuple(box), spec.align, adv, top, bottom)
-        d.text(snap(position), line, font=font, fill=spec.fill, anchor="ls",
-               stroke_width=spec.outline_w,
-               stroke_fill=spec.outline if spec.outline_w else None)
+        draw_text(d, snap(position), line, font, spec.tracking,
+                  fill=spec.fill, anchor="ls",
+                  stroke_width=spec.outline_w,
+                  stroke_fill=spec.outline if spec.outline_w else None)
 
 
 def draw_effected(layer: Image.Image, position, spec: RowSpec,
@@ -868,7 +912,7 @@ def draw_multiline(layer: Image.Image, spec: RowSpec,
     else:
         y0 = by + (bh - block) / 2
     for i, line in enumerate(lines):
-        adv = advance(line, font)
+        adv = advance(line, font, spec.tracking)
         sub = (bx, round(y0 + i * pitch), bw, pitch)   # 이 줄의 슬롯
         position = pen_and_baseline(sub, (h, "m"), adv, top, bottom)
         draw_effected(layer, position, replace(spec, text=line), font)
@@ -903,7 +947,7 @@ def render_single(layer: Image.Image, spec: RowSpec,
         draw_multiline(layer, spec, font, spec.text.split("\n"))
         return
     top, bottom = metric_bounds(font, spec.outline_w)
-    adv = advance(spec.text, font)
+    adv = advance(spec.text, font, spec.tracking)
 
     rotate_match = ROTATE_RE.fullmatch(spec.effect)
     if rotate_match:
@@ -944,7 +988,7 @@ def render_run(layer: Image.Image, members: list[RowSpec],
     for member in members:
         font = fonts.get(member)
         m_top, m_bottom = metric_bounds(font, member.outline_w)
-        adv = advance(member.text, font)
+        adv = advance(member.text, font, member.tracking)
         parts.append((member, font, adv))
         top = min(top, m_top)
         bottom = max(bottom, m_bottom)
