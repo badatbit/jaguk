@@ -618,20 +618,21 @@ const OPTIONAL_STYLE_FIELDS = [
   ["outline_weight_px", "외곽선 두께 px"],
   ["matte_rgb",         "matte 배경색 #RRGGBB (AA 가장자리를 이 색으로 굳혀 1비트 알파 안전)"],
   ["matte_th",          "matte 테두리 임계값 0~255 (투명 픽셀 옆 알파가 th 초과면 그 픽셀을 matte색으로 → 바깥으로 테두리 성장 · 낮을수록 두툼)"],
-  ["effect",            "그림자(drop_shadow) — dx·dy·blur·color 4칸"],
+  // effect(구식 그림자 문자열)는 backward compat — 이미 가진 스타일만 표시·편집.
+  ["shadow",            "그림자 'dx dy blur #RRGGBB(AA)' — CSS box-shadow 식, 뒤 2자리=알파"],
   ["offset_x",          "가로 이동 px"],
   ["offset_y",          "세로 이동 px"],
   ["distribute",        "상자 폭 균등 분배 (true/false)"],
   ["squeeze_min",       "가로 압축 하한 0~1"],
   ["crop_size",         "[w,h] — crop 크기 (행 crop 은 [x,y]만 둘 때)"],
-  ["pad",               '{"l","t","r","b"} px — crop 에서 text 상자 파생'],
+  ["pad",               '안쪽 여백 px — 8 · "8,2"(좌우,상하) · "l,t,r,b" · {"l":8,"t":0,"r":0,"b":0}'],
   ["base",              "상속할 스타일명"],
 ];
 const ALL_STYLE_FIELDS = [...BASIC_STYLE_FIELDS, ...OPTIONAL_STYLE_FIELDS];
 const STYLE_HINTS = Object.fromEntries(ALL_STYLE_FIELDS);
 const DEFAULT_SHADOW = "drop_shadow(dx=2,dy=2,blur=2)";
 // '＋키 추가' 로 넣을 때 미리 채워줄 프리셋 (없는 키는 빈 값으로 열림)
-const STYLE_KEY_PRESETS = { effect: DEFAULT_SHADOW };
+const STYLE_KEY_PRESETS = { effect: DEFAULT_SHADOW, shadow: "2 2 2 #000000FF" };
 // 사용자가 드롭다운으로 드러낸(아직 값은 없는) 선택 키 — 스타일명별
 const styleExtraKeys = {};
 // 스타일명 → 저장/되돌리기 버튼 dirty 표시를 다시 칠하는 함수 (라이브 갱신)

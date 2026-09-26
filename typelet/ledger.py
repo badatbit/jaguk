@@ -74,8 +74,11 @@ distribute(글자 균등 분배), offset_x/offset_y(그리기 원점 이동 px).
 같은 패턴이 반복되는 무리용 (행에는 crop 위치만 남는다):
     crop_size  [w, h] — crop 상자 크기. 행의 crop rect 를 [x, y] 두 값만
                적으면 크기는 스타일이 채운다
-    pad        {"l","t","r","b"} — text 상자 = crop + pad 파생 (행에 text
-               가 없을 때). 행 pad 가 있으면 그것이 우선
+    pad        {"l","t","r","b"} — 안쪽 여백. 행 pad 가 스타일 pad 보다 우선.
+               crop 이 있고 text 가 없으면  text 상자 = crop − pad 로 파생.
+               crop 이 없으면              text 상자를 그만큼 좁힌다.
+               (지운 판을 공통 배경으로 쓰는 overlay 무리가 여기 해당한다 —
+                지울 영역이 따로 없어 crop 을 두지 않는다)
 
 ## flat_rows()
 평면 문자열 dict 를 돌려준다 — 렌더·그림 코드가 쓰는 호환층.
@@ -177,13 +180,55 @@ def crop_rect(r: dict) -> list:
     return list(crop or [])
 
 
+def pad4(value) -> tuple[int, int, int, int]:
+    """pad 값 → (l, t, r, b).
+
+    사람이 GUI 에서 직접 넣는 칸이라 형태가 제각각이다. 힌트가 키 이름을
+    보여 주는데(`{"l","t","r","b"} px`) 그걸 값 순서로 읽어 `{"20","0","0","0"}`
+    처럼 넣는 일이 실제로 있었다. 터지지 않고 알아듣는 쪽이 낫다.
+
+        {"l":8,"t":2}   키가 있는 것만
+        8 · "8"         네 변 모두
+        "8,2"           좌우 8 · 상하 2 (CSS 처럼)
+        "8,2,6,3"       l, t, r, b
+        '{"20","0",…}'  숫자만 뽑아 l, t, r, b
+    """
+    if not value:
+        return (0, 0, 0, 0)
+    if isinstance(value, dict):
+        def g(k):
+            try:
+                return int(value.get(k, 0) or 0)
+            except (TypeError, ValueError):
+                return 0
+        return (g("l"), g("t"), g("r"), g("b"))
+    if isinstance(value, (int, float)):
+        n = int(value)
+        return (n, n, n, n)
+    if isinstance(value, (list, tuple)):
+        nums = [int(x) for x in value if str(x).lstrip("-").isdigit()]
+    else:
+        import re as _re2
+        nums = [int(x) for x in _re2.findall(r"-?\d+", str(value))]
+    if not nums:
+        return (0, 0, 0, 0)
+    if len(nums) == 1:
+        n = nums[0]
+        return (n, n, n, n)
+    if len(nums) == 2:
+        x, y = nums
+        return (x, y, x, y)
+    nums = (nums + [0, 0, 0, 0])[:4]
+    return tuple(nums)
+
+
 def flatten_row(r: dict) -> dict:
     """구조형 행 → 평면 문자열 dict."""
     rect = (crop_rect(r) + [None] * 4)[:4]   # [x,y]만도 허용
     text = r.get("text") or [None] * 4
     src = r.get("source") or [None] * 4
     canvas = r.get("canvas") or [None, None]
-    pad = r.get("pad") or {}
+    pl, pt, pr, pb = pad4(r.get("pad"))
     return {
         "box_id": _s(r.get("box_id")),
         "file": _s(r.get("file")),
@@ -199,8 +244,8 @@ def flatten_row(r: dict) -> dict:
         "canvas_w": _s(canvas[0]), "canvas_h": _s(canvas[1]),
         "source_x": _s(src[0]), "source_y": _s(src[1]),
         "source_box_w": _s(src[2]), "source_box_h": _s(src[3]),
-        "pad_l": _s(pad.get("l")), "pad_t": _s(pad.get("t")),
-        "pad_r": _s(pad.get("r")), "pad_b": _s(pad.get("b")),
+        "pad_l": _s(pl or None), "pad_t": _s(pt or None),
+        "pad_r": _s(pr or None), "pad_b": _s(pb or None),
         "style": _s(r.get("style")),
         "opacity": _s(r.get("opacity")),
         "status": _s(r.get("status")),
@@ -255,6 +300,7 @@ def flat_rows(data: dict) -> list[dict]:
         # 스타일 파생 — 같은 패턴이 반복되는 무리는 행에 crop 위치만 남긴다:
         # ① crop 크기 = 스타일 crop_size (행 crop 은 [x,y] 만)
         # ② text 상자 = crop + pad (행 pad 우선, 없으면 스타일 pad)
+        # ③ crop 이 없으면 pad 를 text 상자 자체에 먹인다 (안쪽 여백)
         style = styles_by_name.get((r.get("style") or "").strip())
         if style:
             rect2 = crop_rect(r)
@@ -263,16 +309,24 @@ def flat_rows(data: dict) -> list[dict]:
                 flat["crop_x"], flat["crop_y"] = str(rect2[0]), str(rect2[1])
                 flat["crop_w"], flat["crop_h"] = str(w), str(h)
             pad = r.get("pad") or style.get("pad")
-            if pad and flat["text_x"] == "" and flat["crop_x"] != "":
-                cx, cy = int(flat["crop_x"]), int(flat["crop_y"])
-                cw, ch = int(flat["crop_w"]), int(flat["crop_h"])
-                left = int(pad.get("l", 0))
-                top = int(pad.get("t", 0))
-                right = int(pad.get("r", 0))
-                bottom = int(pad.get("b", 0))
-                flat["text_x"], flat["text_y"] = str(cx + left), str(cy + top)
-                flat["text_w"] = str(cw - left - right)
-                flat["text_h"] = str(ch - top - bottom)
+            if pad:
+                left, top, right, bottom = pad4(pad)
+                if flat["text_x"] == "" and flat["crop_x"] != "":
+                    # crop 에서 text 상자를 파생한다
+                    cx, cy = int(flat["crop_x"]), int(flat["crop_y"])
+                    cw, ch = int(flat["crop_w"]), int(flat["crop_h"])
+                    flat["text_x"], flat["text_y"] = str(cx + left), str(cy + top)
+                    flat["text_w"] = str(cw - left - right)
+                    flat["text_h"] = str(ch - top - bottom)
+                elif flat["crop_x"] == "" and flat["text_x"] != "":
+                    # 지울 영역(crop)이 따로 없는 무리 — 지운 판을 공통 배경으로
+                    # 쓰는 overlay 가 그렇다. 그때는 text 상자를 그만큼 좁힌다.
+                    # (crop 이 있는 행은 건드리지 않는다 — 기존 동작 그대로)
+                    tx, ty = int(flat["text_x"]), int(flat["text_y"])
+                    tw, th = int(flat["text_w"]), int(flat["text_h"])
+                    flat["text_x"], flat["text_y"] = str(tx + left), str(ty + top)
+                    flat["text_w"] = str(max(1, tw - left - right))
+                    flat["text_h"] = str(max(1, th - top - bottom))
         out.append(flat)
     return out
 
