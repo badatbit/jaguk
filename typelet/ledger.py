@@ -112,6 +112,24 @@ def styles_map(data: dict) -> dict[str, dict]:
     return {s["name"]: s for s in data["styles"]}
 
 
+def style_field(styles_by_name: dict, name: str, key: str, _seen=None):
+    """스타일에서 값 하나를 base 사슬을 따라 찾는다.
+
+    스타일은 `base` 로 상속한다. 파생(crop_size·pad)을 그 스타일 자신에서만
+    읽으면, base 에만 있는 값을 물려받지 못한다 — menu2l(base=menu1l)이
+    menu1l 의 pad 를 못 받는 일이 실제로 있었다.
+    (렌더 쪽 merge_style 과 같은 규칙: 자식이 있으면 자식이 이긴다.)
+    """
+    _seen = _seen or set()
+    style = styles_by_name.get((name or "").strip())
+    if not style or name in _seen:
+        return None
+    _seen.add(name)
+    if style.get(key) not in (None, ""):
+        return style[key]
+    return style_field(styles_by_name, style.get("base") or "", key, _seen)
+
+
 def rows(data: dict) -> list[dict]:
     return data["rows"]
 
@@ -301,14 +319,16 @@ def flat_rows(data: dict) -> list[dict]:
         # ① crop 크기 = 스타일 crop_size (행 crop 은 [x,y] 만)
         # ② text 상자 = crop + pad (행 pad 우선, 없으면 스타일 pad)
         # ③ crop 이 없으면 pad 를 text 상자 자체에 먹인다 (안쪽 여백)
-        style = styles_by_name.get((r.get("style") or "").strip())
+        sname = (r.get("style") or "").strip()
+        style = styles_by_name.get(sname)
         if style:
             rect2 = crop_rect(r)
-            if len(rect2) == 2 and style.get("crop_size"):
-                w, h = style["crop_size"]
+            crop_size = style_field(styles_by_name, sname, "crop_size")
+            if len(rect2) == 2 and crop_size:
+                w, h = crop_size
                 flat["crop_x"], flat["crop_y"] = str(rect2[0]), str(rect2[1])
                 flat["crop_w"], flat["crop_h"] = str(w), str(h)
-            pad = r.get("pad") or style.get("pad")
+            pad = r.get("pad") or style_field(styles_by_name, sname, "pad")
             if pad:
                 left, top, right, bottom = pad4(pad)
                 if flat["text_x"] == "" and flat["crop_x"] != "":
