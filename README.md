@@ -54,8 +54,19 @@ jaguk status
   (일본어만 없앤 판)이다 — GUI 미리보기도, 프로그램 compose 도 똑같이 그렇게 준다.
   `"M05"`·`"M08"` 처럼 컨테이너/접두를 키로 잡으면 그 아래 전부가 지우기 전용이
   되고, 그 중 한글 행이 있는 멤버(overlay 등)는 행이 우선한다.
-- `mode: "overlay"` = base 판 위에 멤버(pic)별로 한글을 얹는 논리 그룹
-  (`members` 목록·`base`·같은 좌표 슬롯). 멤버 소속은 접두 규칙보다 먼저 본다.
+- `mode: "overlay"` = base **그림 위에 멤버 그림을 겹쳐 한 화면에서 보는** 논리
+  그룹 (`members`·`base`). 배경 장면 + 그 위의 간판·이름표처럼 **서로 다른**
+  그림을 합성해 볼 때 쓴다. base 를 열면 그룹 전체가 겹쳐 보이고, 멤버를 열면
+  그 하나만 base 위에 얹힌다.
+- `mode: "same-pattern"` = **같은 틀을 쓰는 집합** — 공통 base(지운 판) · 공통
+  text 상자(`slots`) · 공통 style. 글자만 다른 메뉴 항목, 같은 명판에 이름만
+  바뀌는 카드가 여기 해당한다. **합성하지 않는다** — 멤버는 저마다 한 장으로
+  보고 굽는다. `base` 가 `members` 에 없으면 그것은 판일 뿐 번역 항목이 아니라
+  목록에서 감춘다(구형 `hide_base` 가 하던 일). base 자신도 번역할 그림이면
+  `members` 에 같이 넣는다. 멤버에 제 erased 가 있으면 그것이 우선이고, 없을
+  때만 base 판을 쓴다.
+- 두 그룹 모두 멤버 소속을 접두 규칙보다 먼저 본다. `--same-pattern` 을
+  `--member` 없이 주면 그룹이 아니라 기존 규칙(디렉토리 등)의 플래그가 된다.
 
 ### 프로그램 compose 계약 (게임 주입기 등 외부 소비자용)
 
@@ -65,12 +76,13 @@ jaguk status
 
 | 상황 | 돌려주는 이미지 |
 |---|---|
-| 한글 행 있음(overlay/text-only/rows) | erased + 한글 합성 (`injected/`) |
+| 한글 행 있음(overlay/same-pattern/text-only/rows) | erased + 한글 합성 (`injected/`) |
 | `no-text` 이고 erased 존재 | erased 그대로 (일본어만 없앤 판) |
 | `ignore`·auto·번역 대기(행만 있고 ko 빈) | 없음(원본 유지) |
 
-판정은 `ledger.match_rule`(접두/정확 경로) + `ledger.rule_mode`, overlay 소속은
-`ledger.overlay_group_for` 로 한다.
+판정은 `ledger.match_rule`(접두/정확 경로) + `ledger.rule_mode`, 그룹 소속은
+`ledger.logical_group_for`(overlay + same-pattern) 로 한다. 공통 판은
+`ledger.shared_erased_base`, 감출 판 목록은 `ledger.plate_bases` 다.
 - OCR 교정 사전(`ocr-dict`): 알려진 원문 어휘(.txt 한 줄 하나, 또는 용어표
   파일의 원문 키)와 유사도 ≥ `ocr_dict_min`(기본 0.7)이면 스냅 교정한다.
   원문 OCR 값은 `"ocr"` 필드에 남는다 (スウェーテン→スウェーデン).

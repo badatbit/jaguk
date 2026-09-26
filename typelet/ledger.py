@@ -293,9 +293,10 @@ def flat_rows(data: dict) -> list[dict]:
             _, rule = match_rule(rules_map, r.get("file", ""))
             slots = rule.get("slots") or []
             if not slots:
-                # 논리 overlay 그룹은 이름 키라 경로매칭(match_rule)이 못 찾는다
-                # — 소속 그룹 규칙에서 공유 slots 를 가져온다.
-                grp = overlay_group_for(data, r.get("file", ""))
+                # 논리 그룹(overlay·same-pattern)은 이름 키라 경로매칭
+                # (match_rule)이 못 찾는다 — 소속 그룹 규칙에서 공유 slots 를
+                # 가져온다.
+                grp = logical_group_for(data, r.get("file", ""))
                 if grp:
                     rule = rules_map.get(grp[0], {})
                     slots = rule.get("slots") or []
@@ -373,20 +374,54 @@ def rule_mode(rule: dict) -> str:
     return "text-only" if mode == "image-only" else mode
 
 
-def overlay_groups(data: dict) -> list[tuple[str, str, list[str]]]:
-    """mode=overlay 규칙을 (그룹명, base_rel, [member_rel…]) 로.
-
-    그룹은 **논리적**이다 — base·members 는 실제 아카이브 상대 경로
-    (예: SOZ/soz_011_00.png)를 그대로 가리킨다. 물리 폴더에 의존하지 않는다.
-    """
+def _grouped(data: dict, mode: str) -> list[tuple[str, str, list[str]]]:
     out = []
     for name, rule in (data.get("rules") or {}).items():
-        if rule_mode(rule) != "overlay":
+        if rule_mode(rule) != mode:
             continue
         base = (rule.get("base") or "").replace("\\", "/")
         members = [str(m).replace("\\", "/") for m in (rule.get("members") or [])]
         out.append((name, base, members))
     return out
+
+
+def overlay_groups(data: dict) -> list[tuple[str, str, list[str]]]:
+    """mode=overlay 규칙을 (그룹명, base_rel, [member_rel…]) 로.
+
+    overlay 는 **보기 장치**다 — base 그림 위에 서로 다른 멤버 그림을 얹어 한
+    화면에서 본다 (배경 장면 + 그 위의 간판·이름표 따위). 합성이 목적이다.
+
+    그룹은 **논리적**이다 — base·members 는 실제 아카이브 상대 경로
+    (예: SOZ/soz_011_00.png)를 그대로 가리킨다. 물리 폴더에 의존하지 않는다.
+    """
+    return _grouped(data, "overlay")
+
+
+def pattern_groups(data: dict) -> list[tuple[str, str, list[str]]]:
+    """mode=same-pattern 규칙을 (그룹명, base_rel, [member_rel…]) 로.
+
+    same-pattern 은 **같은 틀을 쓰는 집합**이다 — 공통된 base(지운 판) ·
+    공통 text 상자(slots) · 공통 style 을 나눠 갖는다. 글자만 다른 메뉴 항목,
+    같은 명판에 이름만 바뀌는 카드 따위가 여기 해당한다.
+
+    overlay 와 달리 **합성하지 않는다**. 멤버는 저마다 한 장으로 보고 굽는다.
+    base 는 판일 뿐 번역 항목이 아니라, members 에 없으면 목록에서 감춘다
+    (예전에 overlay + hide_base 로 흉내 내던 것이 이것이다).
+    """
+    return _grouped(data, "same-pattern")
+
+
+def is_same_pattern(rule: dict) -> bool:
+    """공통 판·상자·스타일을 나눠 쓰는 무리인가.
+
+    mode=same-pattern 이거나, 구형 표기인 overlay + same_pattern 플래그.
+    """
+    return rule_mode(rule) == "same-pattern" or bool(rule.get("same_pattern"))
+
+
+def logical_groups(data: dict) -> list[tuple[str, str, list[str]]]:
+    """이름으로 묶인 그룹 전부 (overlay + same-pattern)."""
+    return overlay_groups(data) + pattern_groups(data)
 
 
 def overlay_group_for(data: dict, relative: str, prefer: str | None = None):
@@ -407,20 +442,60 @@ def overlay_group_for(data: dict, relative: str, prefer: str | None = None):
     return None
 
 
-def shared_erased_base(data: dict, relative: str) -> str | None:
-    """same_pattern overlay 그룹의 멤버가 공유할 그룹 base(공통 지운 판) 상대경로.
+def pattern_group_for(data: dict, relative: str, prefer: str | None = None):
+    """relative 이 속한 same-pattern 그룹 (그룹명, base, members).
 
-    멤버별 erased 파일이 없어도 base 판 하나를 공유한다 — 같은 패턴(동일 판)
-    무리는 지운 배경이 전부 같으니 판을 멤버마다 복제하지 않아도 된다.
-    base 자신이거나 · same_pattern 이 아니거나 · 그룹이 아니면 None.
+    base 는 판이라 그 자체로는 소속이 아니다 — members 에 적혀 있을 때만 센다.
     """
-    grp = overlay_group_for(data, relative)
+    relative = (relative or "").replace("\\", "/")
+    groups = pattern_groups(data)
+    if prefer:
+        for name, base, members in groups:
+            if name == prefer and relative in members:
+                return name, base, members
+    for name, base, members in groups:
+        if relative in members:
+            return name, base, members
+    return None
+
+
+def logical_group_for(data: dict, relative: str, prefer: str | None = None):
+    """relative 이 속한 그룹 (overlay 먼저, 없으면 same-pattern)."""
+    return (overlay_group_for(data, relative, prefer)
+            or pattern_group_for(data, relative, prefer))
+
+
+def plate_bases(data: dict) -> set[str]:
+    """번역 항목이 아니라 '판'일 뿐인 base 경로 — 파일 목록에서 감춘다.
+
+    same-pattern 의 base 가 members 에 없으면 그것은 공통 지운 판이다.
+    구형 overlay 의 hide_base 도 같은 뜻이라 함께 본다.
+    """
+    out = set()
+    for _name, base, members in pattern_groups(data):
+        if base and base not in members:
+            out.add(base)
+    for rule in (data.get("rules") or {}).values():
+        if rule.get("hide_base") and rule.get("base"):
+            out.add(str(rule["base"]).replace("\\", "/"))
+    return out
+
+
+def shared_erased_base(data: dict, relative: str) -> str | None:
+    """공통 판을 나눠 쓰는 무리의 멤버가 쓸 base(지운 판) 상대경로.
+
+    멤버별 erased 파일이 없어도 base 판 하나를 공유한다 — 같은 틀을 쓰는
+    무리는 지운 배경이 같으니 판을 멤버마다 복제하지 않아도 된다.
+    제 판이 있으면 그것이 먼저다(render 가 파일 유무로 고른다).
+    base 자신이거나 · 같은 틀 무리가 아니거나 · 그룹이 아니면 None.
+    """
+    grp = logical_group_for(data, relative)
     if not grp:
         return None
     name, base, members = grp
     rule = (data.get("rules") or {}).get(name, {})
     rel = (relative or "").replace("\\", "/")
-    if rule.get("same_pattern") and rel != base and rel in members:
+    if is_same_pattern(rule) and base and rel != base and rel in members:
         return base
     return None
 

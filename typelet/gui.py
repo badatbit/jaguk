@@ -75,19 +75,28 @@ def build_tree(project: Project) -> dict:
             if ledgermod.rule_mode(rule) == "ignore":
                 continue
             by_file[relative] = 0
-    # overlay 그룹은 논리적 — 규칙의 base/members(실제 아카이브 경로)로 소속을
-    # 판정한다. base 파일은 여러 그룹이 공유할 수 있어 양쪽에 다 뜬다.
+    # 이름으로 묶인 그룹은 논리적 — 규칙의 base/members(실제 아카이브 경로)로
+    # 소속을 판정한다. base 파일은 여러 그룹이 공유할 수 있어 양쪽에 다 뜬다.
+    #
+    #   overlay      base + 멤버를 겹쳐 한 화면에서 본다 → base 도 목록에 넣는다
+    #                (base 를 열면 그룹 전체 합성이 보인다)
+    #   same-pattern 같은 틀(공통 판·상자·스타일)을 쓰는 집합 — 합성하지 않는다.
+    #                base 는 판일 뿐이라 멤버만 목록에 넣는다.
     overlay_defs = ledgermod.overlay_groups(data)
+    pattern_defs = ledgermod.pattern_groups(data)
     member_to_groups: dict[str, list] = {}
     for name, base, members in overlay_defs:
         for rel in ([base] + list(members)):
             if rel:
                 member_to_groups.setdefault(rel, []).append(name)
+    for name, _base, members in pattern_defs:
+        for rel in members:
+            if rel:
+                member_to_groups.setdefault(rel, []).append(name)
     overlay_names = {name for name, _, _ in overlay_defs}
-    # hide_base 규칙의 base 는 목록에서 숨긴다 — 텍스트 없는 순수 배경(예: 헛간
-    # 이름표의 BGHut.png). 합성에는 그대로 쓰이고 트리에만 안 보인다.
-    hidden_bases = {r["base"] for r in rules_map.values()
-                    if r.get("hide_base") and r.get("base")}
+    # 판(번역 항목이 아닌 배경)은 목록에서 숨긴다 — same-pattern 의 공통 판,
+    # 그리고 구형 overlay 의 hide_base. 렌더에는 그대로 쓰이고 트리에만 안 보인다.
+    hidden_bases = ledgermod.plate_bases(data)
 
     grouped: dict[str, list] = {}
     loose = []
@@ -100,13 +109,13 @@ def build_tree(project: Project) -> dict:
         if count == 1:                               # 텍스트 1개 → 미리보기 축약용
             entry["text"] = ko_first.get(relative, "")
         gnames = member_to_groups.get(relative)
-        if gnames:                                  # overlay 그룹 멤버/베이스
+        if gnames:                                  # 논리 그룹 멤버/베이스
             for gname in gnames:
                 grouped.setdefault(gname, []).append(entry)
             continue
         rule_path, rule = ledgermod.match_rule(rules_map, relative)
         if (rule_path and rule_path != relative      # 디렉토리(접두) 규칙만 묶음
-                and ledgermod.rule_mode(rule) != "overlay"):
+                and ledgermod.rule_mode(rule) not in ("overlay", "same-pattern")):
             grouped.setdefault(rule_path, []).append(entry)
         else:
             loose.append(entry)
@@ -642,8 +651,15 @@ def render_injected(project: Project, relative: str,
         blank = render_blank(project, relative)
         if blank is not None:
             return store(blank)
-        for root in (project.base_root, project.original_root):
-            path = _safe_join(root, relative)
+        # 제 지운 판 → 같은 틀 무리의 공통 판 → 원본 순. 공통 판을 건너뛰면
+        # 스타일이 아직 없는 행이 원본(일본어)으로 보여 지운 줄 알게 된다.
+        shared = ledgermod.shared_erased_base(data, relative)
+        candidates = [(project.base_root, relative)]
+        if shared:
+            candidates.append((project.base_root, shared))
+        candidates.append((project.original_root, relative))
+        for root, rel in candidates:
+            path = _safe_join(root, rel)
             if path and path.exists():
                 return store(path.read_bytes())
         return None
@@ -651,8 +667,9 @@ def render_injected(project: Project, relative: str,
     posts = [p for p in data.get("post", []) if p.get("file") == relative]
     output = None
     try:
+        # data 를 준다 — 같은 틀 무리의 멤버가 제 판이 없으면 그룹 공통 판을 쓴다
         output, _, _ = rendermod.compose_file(project, relative, specs,
-                                              posts=posts or None)
+                                              posts=posts or None, data=data)
     except FileNotFoundError:
         # erased 베이스가 아직 없으면 원본 위 덧구움으로 미리보기
         try:
@@ -817,11 +834,11 @@ def box_update(project: Project, relative: str, box_id: str,
     for row in ledgermod.rows(data):
         if row.get("box_id") == box_id:      # box_id 유니크 (그룹 뷰 대응)
             slot = row.get("slot")
-            grp = (ledgermod.overlay_group_for(data, row.get("file", ""))
+            grp = (ledgermod.logical_group_for(data, row.get("file", ""))
                    if slot is not None else None)
             rule = rules_map.get(grp[0]) if grp else None
-            if rule is not None and rule.get("same_pattern"):
-                # same_pattern: 상자는 그룹이 공유한다 — 원문·번역만 멤버별로
+            if rule is not None and ledgermod.is_same_pattern(rule):
+                # 같은 틀 무리: 상자는 그룹이 공유한다 — 원문·번역만 멤버별로
                 # 다르고 text-box 는 하나다. 개별 행이 아니라 공유 slot 을 고쳐
                 # 전 멤버에 한 번에 반영한다.
                 slots = rule.setdefault("slots", [])
@@ -856,10 +873,16 @@ def box_update(project: Project, relative: str, box_id: str,
             if f"{cat['name']}:{fname.split('.')[0]}" == box_id:
                 if key != "text":
                     raise ValueError("text-only 항목은 text 상자만 조정 가능")
-                entry["text"] = rect
+                # 상자는 패턴(묶음)의 속성 — 묶음 공통(meta) text 한 곳을
+                # 고쳐 전 항목에 반영한다. 항목마다 고치는 구조면 항목이
+                # 만 개일 때 만 번 고쳐야 한다. 남은 항목별 override 는
+                # 걷어내 패턴을 하나로 유지한다.
+                cat["text"] = rect
+                for e2 in (cat.get("entries") or {}).values():
+                    e2.pop("text", None)
                 ledgermod.save(project, data)
-                _INJECT_CACHE.pop(relative, None)
-                return f"{box_id}.text = {rect} (entry override)"
+                _INJECT_CACHE.clear()
+                return f"{box_id}.text = {rect} (묶음 공통 — 전 항목 반영)"
     raise ValueError(f"행을 찾지 못함: {box_id}")
 
 
@@ -1116,7 +1139,7 @@ def make_handler(project: Project, config_path: Path | None = None):
                         # 남긴다(원본 일본어로 폴백하지 않게).
                         rule_g = (img_data.get("rules") or {}).get(_gk, {})
                         er_overlays = overlays
-                        if rule_g.get("same_pattern"):
+                        if ledgermod.is_same_pattern(rule_g):
                             def _has_erased(o):
                                 p = _safe_join(project.base_root, o)
                                 return bool(p and p.exists())
@@ -1169,8 +1192,14 @@ def make_handler(project: Project, config_path: Path | None = None):
                             self.send_error(404)
                             return
                     elif body is None and kind == "erased":
-                        # erased 파일이 있으면 그것, 없으면 base(원본) 그대로.
-                        disk = _safe_join(IMAGE_ROOTS["erased"](project), relative)
+                        # 제 erased 파일이 있으면 그것, 없으면 같은 틀 무리의
+                        # 공통 판, 그것도 없으면 원본 그대로.
+                        er_root = IMAGE_ROOTS["erased"](project)
+                        disk = _safe_join(er_root, relative)
+                        if not (disk and disk.exists()):
+                            shared = ledgermod.shared_erased_base(
+                                ledgermod.load(project), relative)
+                            disk = _safe_join(er_root, shared) if shared else None
                         if disk and disk.exists():
                             body = disk.read_bytes()
                         else:

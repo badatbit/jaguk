@@ -321,10 +321,11 @@ def resolve_rule_key(project: Project, target: str) -> str:
 
 def cmd_set(args) -> int:
     project = load_project(args.config)
-    # 논리 overlay 그룹: target 은 그룹 이름(경로 아님), base/member 는 실제
-    # 아카이브 경로. 물리 폴더가 없어도 되도록 resolve_rule_key 를 건너뛴다.
-    logical_overlay = bool(args.overlay and args.member)
-    key = args.target if logical_overlay else resolve_rule_key(project, args.target)
+    # 논리 그룹(overlay · same-pattern): target 은 그룹 이름(경로 아님),
+    # base/member 는 실제 아카이브 경로. 물리 폴더가 없어도 되도록
+    # resolve_rule_key 를 건너뛴다.
+    logical = bool(args.member and (args.overlay or args.same_pattern))
+    key = args.target if logical else resolve_rule_key(project, args.target)
     data = ledgermod.load(project)
     rules = data.setdefault("rules", {})
 
@@ -339,8 +340,10 @@ def cmd_set(args) -> int:
     rule = rules.get(key, {})
     if args.ignore:
         rule = {"mode": "ignore"}
-    elif args.overlay:
-        rule["mode"] = "overlay"
+    elif args.overlay or (args.same_pattern and args.member):
+        # overlay = base 위에 멤버를 겹쳐 한 화면에서 보는 장치.
+        # same-pattern = 공통 판·상자·스타일을 나눠 쓰는 집합 (합성 안 함).
+        rule["mode"] = "overlay" if args.overlay else "same-pattern"
         if args.base:
             rule["base"] = args.base.replace("\\", "/")
         if args.member:      # 논리 멤버 목록 (실제 아카이브 경로)
@@ -354,7 +357,9 @@ def cmd_set(args) -> int:
             if role not in ("ref", "replace", "ignore"):
                 sys.exit(f"--row 역할은 ref|replace|ignore: {role!r}")
             rows[str(int(number))] = role
-    if args.same_pattern:
+    if args.same_pattern and ledgermod.rule_mode(rule) != "same-pattern":
+        # mode=same-pattern 이면 그 자체가 '같은 틀' 이라 플래그가 군더더기다.
+        # 디렉토리 규칙 등 멤버 없는 대상에서만 플래그로 남긴다.
         rule["same_pattern"] = True
     if args.unify_boxes:
         rule["unify_boxes"] = True
@@ -394,7 +399,18 @@ def apply_rule(project: Project, data: dict, key: str, rule: dict) -> None:
     """
     mode = ledgermod.rule_mode(rule)
 
+    # 논리 그룹(overlay · same-pattern)의 key 는 이름이라 경로 접두로는 못 찾는다
+    # — 규칙에 적힌 base/members 가 그대로 대상이다.
+    group_files: set[str] = set()
+    if mode in ("overlay", "same-pattern"):
+        group_files = {m for m in (rule.get("members") or [])}
+        if rule.get("base") and mode == "overlay":
+            group_files.add(rule["base"])       # overlay 의 base 는 번역 항목
+        group_files = {str(f).replace("\\", "/") for f in group_files}
+
     def under(relative: str) -> bool:
+        if group_files:
+            return relative in group_files
         return relative == key or relative.startswith(key.rstrip("/") + "/")
 
     rows = ledgermod.rows(data)
@@ -455,7 +471,7 @@ def apply_rule(project: Project, data: dict, key: str, rule: dict) -> None:
                   f"필요하니 `jaguk extract --only {key}` 로 다시 뽑으세요")
         targets = [r for r in data["rows"] if under(r.get("file", ""))]
 
-    if rule.get("same_pattern") or rule.get("unify_boxes"):
+    if ledgermod.is_same_pattern(rule) or rule.get("unify_boxes"):
         slots, moved = _normalize_slots(targets, rule)
         if slots:
             print(f"적용(패턴 정규화): 규칙에 슬롯 {slots}개 — text 중앙값·"
@@ -464,7 +480,7 @@ def apply_rule(project: Project, data: dict, key: str, rule: dict) -> None:
     # 스타일 통일 — --style 이 있으면 그것으로, --same-pattern 만 있으면
     # 기존 행들의 다수결 스타일로 무리 전체를 맞춘다
     style = rule.get("style", "")
-    if not style and rule.get("same_pattern") and targets:
+    if not style and ledgermod.is_same_pattern(rule) and targets:
         from collections import Counter
         counts = Counter(r.get("style") for r in targets if r.get("style"))
         if counts:
@@ -830,19 +846,33 @@ def run_extract(project: Project, only: str = "", backend: str = "") -> int:
               "원본 트리를 직접 두세요 (scan/copy 는 비활성).")
         return 1
 
-    counts = {"auto": 0, "text-only": 0, "rows": 0, "overlay": 0, "ignore": 0}
+    counts = {"auto": 0, "text-only": 0, "rows": 0, "overlay": 0, "ignore": 0,
+              "plate": 0}
+    plates = ledgermod.plate_bases(data)
     plan: list[tuple[str, str, dict, str]] = []   # (rel, rule_path, rule, mode)
     for path in targets:
         relative = path.relative_to(project.original_root).as_posix()
-        # overlay 그룹은 논리적 — base/member 소속을 접두 규칙보다 먼저 본다
+        if relative in plates:
+            # 공통 지운 판 — 글자를 지워 둔 배경이라 읽을 것이 없다
+            counts["plate"] += 1
+            continue
+        # 논리 그룹은 base/member 소속을 접두 규칙보다 먼저 본다
         grp = ledgermod.overlay_group_for(data, relative)
         if grp:
             rule_path = grp[0]
             rule = rules.get(rule_path, {})
             mode = "overlay"
         else:
-            rule_path, rule = match_rule(rules, relative)
-            mode = ledgermod.rule_mode(rule)
+            # same-pattern 은 합성이 아니라 한 장씩 보는 무리라 OCR 도 auto 다.
+            # 그룹 이름은 살려 둔다 — 규칙별 --dict 가 무리에 걸리게.
+            pgrp = ledgermod.pattern_group_for(data, relative)
+            if pgrp:
+                rule_path = pgrp[0]
+                rule = rules.get(rule_path, {})
+                mode = "ignore" if ledgermod.rule_mode(rule) == "ignore" else "auto"
+            else:
+                rule_path, rule = match_rule(rules, relative)
+                mode = ledgermod.rule_mode(rule)
         counts[mode] = counts.get(mode, 0) + 1
         if mode == "ignore":
             continue
@@ -915,9 +945,8 @@ def run_extract(project: Project, only: str = "", backend: str = "") -> int:
     skipped += s
     if added:
         ledgermod.save(project, data)
-    print(f"처리: auto {counts['auto']}장 / text-only {counts['text-only']}장 / "
-          f"rows {counts['rows']}장 / overlay {counts['overlay']}장 / "
-          f"ignore {counts['ignore']}장 (OCR 제외)")
+    print("처리: " + " / ".join(f"{k} {v}장" for k, v in counts.items() if v)
+          + " (ignore·plate 는 OCR 제외)")
     print(f"원장 기록 {added}건 추가, 기존 {skipped}건 유지 -> {project.ledger_path}")
     return 0
 
@@ -1055,7 +1084,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--text-only", action="store_true",
                    help="이미지 전체가 글자 — text-only 묶음으로 (base 불필요)")
     p.add_argument("--same-pattern", action="store_true",
-                   help="무리 전체가 같은 스타일")
+                   help="같은 틀을 쓰는 집합 — 공통 base(지운 판)·공통 text "
+                        "상자·공통 스타일. --member 와 함께 주면 그 자체로 "
+                        "논리 그룹이 된다 (합성하지 않는다. 겹쳐 보려면 "
+                        "--overlay). --member 없이 주면 기존 규칙에 플래그만")
     p.add_argument("--unify-boxes", action="store_true",
                    help="text 상자(주입 위치)를 슬롯별 표준 상자로 통일 — "
                         "일괄 위치 조정용. crop·source 는 실측 유지")
@@ -1065,15 +1097,19 @@ def main(argv: list[str] | None = None) -> int:
                    help="한 줄에 여러 항목 — 열별로 ref-replace 짝짓기")
     p.add_argument("--ignore", action="store_true", help="처리 제외")
     p.add_argument("--overlay", action="store_true",
-                   help="base + 오버레이 묶음 (논리 그룹). --member 로 실제 "
-                        "아카이브 경로를 나열하면 target 은 그룹 이름이 된다. "
-                        "각 오버레이의 마커 상자(config crop_marker)를 crop-box 로")
+                   help="base 위에 멤버를 **겹쳐 한 화면에서 보는** 묶음 "
+                        "(논리 그룹). 배경 장면 + 그 위의 간판·이름표처럼 서로 "
+                        "다른 그림을 합성해 볼 때. --member 로 실제 아카이브 "
+                        "경로를 나열하면 target 은 그룹 이름이 된다. 각 "
+                        "오버레이의 마커 상자(config crop_marker)를 crop-box 로")
     p.add_argument("--base", default="",
-                   help="--overlay 의 베이스 이미지 (originals 기준 경로, "
-                        "예: SOZ/soz_011_00.png). 지운 배경 = 이 파일")
+                   help="그룹의 베이스 이미지 (originals 기준 경로, 예: "
+                        "SOZ/soz_011_00.png). --overlay 면 합성 배경, "
+                        "--same-pattern 이면 공통 지운 판")
     p.add_argument("--member", action="append", default=[], metavar="REL",
-                   help="--overlay 그룹의 멤버 (originals 기준 경로). 반복 지정. "
-                        "주면 그룹이 논리적이 되어 물리 폴더가 필요 없다")
+                   help="그룹의 멤버 (originals 기준 경로). 반복 지정. 주면 "
+                        "그룹이 논리적이 되어 물리 폴더가 필요 없다. "
+                        "--same-pattern 과 함께 주면 same-pattern 그룹이 된다")
     p.add_argument("--dict", default="", help="이 무리의 번역 용어표 파일")
     p.add_argument("--style", default="", help="적용할 스타일 이름")
     p.add_argument("--apply", action="store_true",
