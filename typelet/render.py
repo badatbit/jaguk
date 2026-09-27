@@ -110,6 +110,7 @@ class RowSpec:
     angle: float = 0.0                      # 상자별 틸트(회전) 각도 (도, 반시계+)
     matte: tuple | None = None              # 배경색RGB(1색) — 스타일 matte
     matte_th: int | None = None             # matte 테두리 임계값 — 알파 급변 가장자리를 matte색으로
+    matte_hard: bool = False                # matte 깐 자리를 알파 255 로 굳힘 (1비트 알파용)
 
 
 def parse_box(row: dict[str, str], prefix: str, box_id: str,
@@ -293,9 +294,11 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
     # angle — 상자별 틸트(회전). 행에 저장(스타일 아님). GUI 회전 핸들이 쓴다.
     angle = float(row.get("angle") or 0)
 
-    # matte — 스타일 옵션(1색). 이 스타일 레이어를 이 색 배경 위에 합성한다:
-    # alpha==255(솔리드 코어)는 그대로, 그 밖(AA·글로우·투명)은 배경색으로 채워져
-    # 완전 불투명해진다. 게임 1비트 알파에서 반투명 가장자리가 깨지는 걸 막는다.
+    # matte — 스타일 옵션(1색). 이 스타일 레이어를 이 색 배경 위에 합성한다.
+    # 글자 자리(alpha>0) 뒤에 이 색을 깔아, 글자의 AA 가 배경색 위에 얹히게 한다
+    # (검은 띠 방지). **기본값은 알파를 안 굳힌다** — 바깥 가장자리 한 겹은
+    # 반투명으로 남아 게임 배경과 부드럽게 섞인다. 1비트 알파처럼 반투명을 못
+    # 담는 곳에 넣을 거라면 matte_hard 로 굳혀야 한다.
     matte_s = (style.get("matte_rgb") or "").strip()
     matte = parse_color(matte_s, 255, "matte_rgb", box_id)[:3] if matte_s else None
 
@@ -312,6 +315,16 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
             raise ValueError(f"{box_id}: matte_th 는 0~255 여야 합니다: {matte_th}")
         if matte is None:
             raise ValueError(f"{box_id}: matte_th 를 쓰려면 matte_rgb 가 필요합니다")
+
+    # matte_hard — matte 를 깐 자리의 알파를 255 로 굳힌다. 결과는 알파가 0 아니면
+    # 255 뿐이라 1비트 알파(팔레트 PNG·인덱스 텍스처)에 그대로 넣을 수 있다.
+    # 대신 가장자리 계단이 보인다 — 반투명이 허용되는 곳이면 끄고 쓰는 게 곱다.
+    # 스타일 값은 GUI 에서 문자열로 들어온다 — bool("false") 는 참이므로 못 쓴다.
+    matte_hard_raw = style.get("matte_hard")
+    matte_hard = str("" if matte_hard_raw is None else matte_hard_raw).strip().lower() \
+        not in ("", "0", "false", "no", "off")
+    if matte_hard and matte is None:
+        raise ValueError(f"{box_id}: matte_hard 를 쓰려면 matte_rgb 가 필요합니다")
 
     return RowSpec(
         box_id=box_id,
@@ -341,6 +354,7 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
         angle=angle,
         matte=matte,
         matte_th=matte_th,
+        matte_hard=matte_hard,
     )
 
 
@@ -1072,8 +1086,8 @@ def apply_post(project: Project, source: Image.Image, output: Image.Image,
         output.alpha_composite(layer)
 
 
-def _matte_bg(color: tuple, th: int | None,
-              layer_fg: Image.Image) -> Image.Image:
+def _matte_bg(color: tuple, th: int | None, layer_fg: Image.Image,
+              hard: bool = False) -> Image.Image:
     """matte 배경 레이어를 만든다 — 전경(글자) 레이어의 알파를 보고 만든다.
 
     기본(matte_th 없음): 글자가 있는 자리(a>0) 뒤에 matte 색을 깐다 — 파랑 AA 가
@@ -1081,8 +1095,12 @@ def _matte_bg(color: tuple, th: int | None,
     matte_th 설정 시: 추가로 **완전 투명(a==0)이지만 8-이웃 최대 알파가 th 초과인
     곳**까지 배경을 넓혀(테두리 성장) 준다.
 
-    핵심: 어디에 깔지는 0/1 로 판단하되, **합성에 쓰는 알파 값은 gradation
-    (이웃 최대 알파)** 을 그대로 써서 경계가 자연스럽다(1비트로 안 굳힘).
+    **어디에 깔지(place)와 어떤 알파로 깔지는 다른 이야기다.**
+      hard=False(기본) — 깐 자리의 알파는 gradation(이웃 최대 d) 그대로다. 글자
+        안쪽은 d=255 라 불투명해지지만 **바깥 한 겹은 반투명으로 남는다**. 그게
+        halo 를 게임 배경과 부드럽게 잇는다. 1비트로 굳히지 않는다.
+      hard=True — 깐 자리를 전부 알파 255 로 굳힌다. 결과 알파가 0/255 뿐이라
+        1비트 알파에 그대로 넣을 수 있다. 대신 가장자리에 계단이 진다.
     """
     import numpy as np
     a_img = layer_fg.getchannel("A")
@@ -1094,12 +1112,9 @@ def _matte_bg(color: tuple, th: int | None,
     place = a > 0
     if th is not None:
         place = place | (d > th)
-    # 합성 알파: **gradation(이웃 최대 d)** — 1비트로 굳히지 않는다. 글자 뒤는
-    #   불투명(파랑 AA 가 흰 위에 얹혀 파랑→흰색), 바깥 halo 는 알파가 부드럽게
-    #   떨어져 게임 배경과 자연스럽게 섞인다.
     bg = np.zeros((a.shape[0], a.shape[1], 4), dtype="uint8")   # 전부 투명
     bg[..., 0], bg[..., 1], bg[..., 2] = color[0], color[1], color[2]
-    bg[..., 3] = np.where(place, d, 0).astype("uint8")
+    bg[..., 3] = np.where(place, 255 if hard else d, 0).astype("uint8")
     return Image.fromarray(bg, "RGBA")
 
 
@@ -1112,6 +1127,7 @@ def _render_matte(size: tuple[int, int], spec: RowSpec,
     글자(전경)는 렌더된 그대로 — alpha>0 픽셀은 하나도 안 건드린다.
     matte 색(matte_rgb)이 없으면 배경 없이 전경만 돌려준다. matte_th 는
     **선택** — 없으면 글자 뒤 기본 matte 만, 있으면 바깥으로 테두리도 성장.
+    matte_hard 면 깔린 자리를 알파 255 로 굳혀 결과가 0/255 만 갖는다.
     """
     layer_ss = Image.new("RGBA", (size[0] * ss, size[1] * ss), (0, 0, 0, 0))
     render_single(layer_ss, scale_spec(spec, ss), fonts)
@@ -1127,7 +1143,7 @@ def _render_matte(size: tuple[int, int], spec: RowSpec,
             layer_ss.getchannel("A").resize(size, Image.Resampling.BOX))
     if spec.matte is None:
         return layer_fg                       # matte 색 없음 — 글자만
-    layer_bg = _matte_bg(spec.matte, spec.matte_th, layer_fg)
+    layer_bg = _matte_bg(spec.matte, spec.matte_th, layer_fg, spec.matte_hard)
     return Image.alpha_composite(layer_bg, layer_fg)   # 배경 위에 전경
 
 

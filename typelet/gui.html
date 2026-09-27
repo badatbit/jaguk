@@ -616,8 +616,9 @@ const OPTIONAL_STYLE_FIELDS = [
   ["letter_spacing_px", "자간 px — 글자 사이에만 더한다 (음수=좁힘, 세로쓰기·균등분배와 병용 불가)"],
   ["outline_rgb",       "외곽선색 #RRGGBB"],
   ["outline_weight_px", "외곽선 두께 px"],
-  ["matte_rgb",         "matte 배경색 #RRGGBB (AA 가장자리를 이 색으로 굳혀 1비트 알파 안전)"],
-  ["matte_th",          "matte 테두리 임계값 0~255 (투명 픽셀 옆 알파가 th 초과면 그 픽셀을 matte색으로 → 바깥으로 테두리 성장 · 낮을수록 두툼)"],
+  ["matte_rgb",         "matte 배경색 #RRGGBB — 글자 뒤에 이 색을 깔아 AA 가 이 색 위에 얹히게 한다(검은 띠 방지). ★알파는 안 굳는다 — 바깥 한 겹은 반투명으로 남는다"],
+  ["matte_th",          "matte 테두리 임계값 0~255 (투명 픽셀 옆 알파가 th 초과면 그 픽셀을 matte색으로 → 바깥으로 테두리 성장 · 낮을수록 두툼). 자르는 문턱이지 평탄화가 아니다"],
+  ["matte_hard",        "matte 깐 자리를 알파 255 로 굳힌다 (true/false) — 결과 알파가 0/255 뿐이라 1비트 알파에 안전, 대신 가장자리 계단"],
   // effect(구식 그림자 문자열)는 backward compat — 이미 가진 스타일만 표시·편집.
   ["shadow",            "그림자 'dx dy blur #RRGGBB(AA)' — CSS box-shadow 식, 뒤 2자리=알파"],
   ["offset_x",          "가로 이동 px"],
