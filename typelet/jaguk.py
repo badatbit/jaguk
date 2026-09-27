@@ -325,9 +325,13 @@ def cmd_set(args) -> int:
     # base/member 는 실제 아카이브 경로. 물리 폴더가 없어도 되도록
     # resolve_rule_key 를 건너뛴다.
     logical = bool(args.member and (args.overlay or args.same_pattern))
-    key = args.target if logical else resolve_rule_key(project, args.target)
     data = ledgermod.load(project)
     rules = data.setdefault("rules", {})
+    # 이미 있는 규칙 이름을 그대로 대상으로 받는다 — 논리 그룹은 경로가 아니라
+    # 이름이라, 멤버를 다시 안 적고 cat·style 만 고치려면 이 길이 필요하다.
+    if not logical and args.target in rules:
+        logical = True
+    key = args.target if logical else resolve_rule_key(project, args.target)
 
     if args.clear:
         if rules.pop(key, None) is not None:
@@ -365,6 +369,8 @@ def cmd_set(args) -> int:
         rule["unify_boxes"] = True
     if args.multicolumn:
         rule["multicolumn"] = True
+    if args.cat:
+        rule["cat"] = args.cat
     if args.style:
         rule["style"] = args.style
     if args.dict:
@@ -1110,6 +1116,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="그룹의 멤버 (originals 기준 경로). 반복 지정. 주면 "
                         "그룹이 논리적이 되어 물리 폴더가 필요 없다. "
                         "--same-pattern 과 함께 주면 same-pattern 그룹이 된다")
+    p.add_argument("--cat", default="",
+                   help="검수 트리에서 이 규칙을 담을 폴더 이름 (여러 규칙에 "
+                        "같은 이름을 주면 한 폴더로 접힌다). 빈 값이면 최상위")
     p.add_argument("--dict", default="", help="이 무리의 번역 용어표 파일")
     p.add_argument("--style", default="", help="적용할 스타일 이름")
     p.add_argument("--apply", action="store_true",

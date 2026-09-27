@@ -43,7 +43,9 @@ text_only 로 묶는다 — 공통 속성을 한 번만 선언하고 항목은 �
      "entries": {"slsn00001.tga.png": {"jp","ko","status", …개별 override}}}
 
 entries 의 개별 항목은 canvas·text·style·opacity·overflow 를 override 할
-수 있다.
+수 있다. 다만 **style 은 묶음이 드는 것이 기준**이다 — GUI 에서 스타일을
+고치면 묶음의 style 이 바뀌고 항목별 지정은 걷힌다. 항목별 style 은 옛
+원장을 계속 읽기 위해 남겨 둔 길이다.
 
 ## terms (선택, 최상위 키) — 전역 번역 용어표
 같은 원문이 여러 행에 반복될 때(안내판 지명 222종이 1,745행에 등장),
@@ -276,6 +278,32 @@ def flatten_row(r: dict) -> dict:
     }
 
 
+def slot_spec_for(data: dict, relative: str, slot: int,
+                  rules_map: dict | None = None) -> tuple[dict, dict]:
+    """(슬롯을 든 규칙, 그 슬롯의 스펙). 없으면 ({}, {}).
+
+    슬롯은 mode 를 가리지 않는다 — rows(디렉토리 규칙)도, same-pattern(이름
+    규칙)도 같은 자리를 가리키는 상자를 규칙의 slots 로 올린다. 그래서 규칙을
+    두 갈래로 찾는다: 경로 매칭 먼저, 못 찾으면 소속 논리 그룹.
+    """
+    rules_map = rules(data) if rules_map is None else rules_map
+    _, rule = match_rule(rules_map, relative)
+    slots = rule.get("slots") or []
+    if not slots:
+        grp = logical_group_for(data, relative)
+        if grp:
+            rule = rules_map.get(grp[0], {})
+            slots = rule.get("slots") or []
+    if not slots:
+        return {}, {}
+    if slot is None or not (0 <= slot < len(slots)):
+        return rule, {}
+    spec = slots[slot]
+    if isinstance(spec, list):                  # 구형 — text 상자만
+        spec = {"text": spec}
+    return rule, spec
+
+
 def flat_rows(data: dict) -> list[dict]:
     """일반 행 + text-only 전개 — 렌더·그림이 보는 전체 목록.
 
@@ -289,38 +317,56 @@ def flat_rows(data: dict) -> list[dict]:
     for r in rows(data) + expand_catalogs(data):
         flat = flatten_row(r)
         slot = r.get("slot")
+        slot_spec: dict = {}
+        owner_rule: dict = {}
         if slot is not None:
-            _, rule = match_rule(rules_map, r.get("file", ""))
-            slots = rule.get("slots") or []
-            if not slots:
-                # 논리 그룹(overlay·same-pattern)은 이름 키라 경로매칭
-                # (match_rule)이 못 찾는다 — 소속 그룹 규칙에서 공유 slots 를
-                # 가져온다.
-                grp = logical_group_for(data, r.get("file", ""))
-                if grp:
-                    rule = rules_map.get(grp[0], {})
-                    slots = rule.get("slots") or []
-            if 0 <= slot < len(slots):
-                spec = slots[slot]
-                if isinstance(spec, list):          # 구형 — text 상자만
-                    spec = {"text": spec}
-                if not r.get("text") and spec.get("text"):
-                    x, y, w, h = spec["text"]
-                    flat["text_x"], flat["text_y"] = str(x), str(y)
-                    flat["text_w"], flat["text_h"] = str(w), str(h)
-                if not r.get("crop") and spec.get("crop"):
-                    x, y, w, h = spec["crop"]
-                    flat["crop_x"], flat["crop_y"] = str(x), str(y)
-                    flat["crop_w"], flat["crop_h"] = str(w), str(h)
-                if not r.get("source") and spec.get("source"):
-                    x, y, w, h = spec["source"]
-                    flat["source_x"], flat["source_y"] = str(x), str(y)
-                    flat["source_box_w"], flat["source_box_h"] = str(w), str(h)
+            owner_rule, spec = slot_spec_for(data, r.get("file", ""), slot,
+                                             rules_map)
+            slot_spec = spec
+            if not r.get("text") and spec.get("text"):
+                x, y, w, h = spec["text"]
+                flat["text_x"], flat["text_y"] = str(x), str(y)
+                flat["text_w"], flat["text_h"] = str(w), str(h)
+            if not r.get("crop") and spec.get("crop"):
+                x, y, w, h = spec["crop"]
+                flat["crop_x"], flat["crop_y"] = str(x), str(y)
+                flat["crop_w"], flat["crop_h"] = str(w), str(h)
+            if not r.get("source") and spec.get("source"):
+                x, y, w, h = spec["source"]
+                flat["source_x"], flat["source_y"] = str(x), str(y)
+                flat["source_box_w"], flat["source_box_h"] = str(w), str(h)
         # 스타일 파생 — 같은 패턴이 반복되는 무리는 행에 crop 위치만 남긴다:
         # ① crop 크기 = 스타일 crop_size (행 crop 은 [x,y] 만)
         # ② text 상자 = crop + pad (행 pad 우선, 없으면 스타일 pad)
         # ③ crop 이 없으면 pad 를 text 상자 자체에 먹인다 (안쪽 여백)
+        # 스타일도 상자와 같이 **슬롯**이 든다 — 한 그림에 자리가 여럿이면
+        # (라벨 · 눈금 왼끝 · 눈금 오른끝, 안내판의 한자줄·로마자줄) 자리마다
+        # 생김새가 다르다. rows 든 same-pattern 이든 슬롯을 쓰면 마찬가지다.
+        # 행 > 슬롯 > 무리 공통(same-pattern) 순으로 찾는다.
         sname = (r.get("style") or "").strip()
+        if not sname:
+            sname = str(slot_spec.get("style") or "").strip()
+            if not sname:
+                if not owner_rule:
+                    grp = logical_group_for(data, r.get("file", ""))
+                    owner_rule = rules_map.get(grp[0], {}) if grp else {}
+                if is_same_pattern(owner_rule):
+                    sname = str(owner_rule.get("style") or "").strip()
+            if sname:
+                flat["style"] = sname
+        # base 도 같은 차례로 — 행 > 슬롯 > 무리 공통(same-pattern).
+        # 규칙의 base 는 보통 **공통 지운 판의 경로**라 행으로 옮기면 안 된다.
+        # 다만 "blank" 은 경로가 아니라 "판이 없다"는 표시이므로 멤버가 물려받는다
+        # — 지울 배경이 없고 글자만 새로 그리면 되는 무리(인게임 메시지 따위)에서
+        # 멤버마다 base 를 적지 않아도 되게 한다.
+        if not flat["base"]:
+            if not owner_rule:
+                grp = logical_group_for(data, r.get("file", ""))
+                owner_rule = rules_map.get(grp[0], {}) if grp else {}
+            if (str(slot_spec.get("base") or "").strip() == "blank"
+                    or (is_same_pattern(owner_rule)
+                        and str(owner_rule.get("base") or "").strip() == "blank")):
+                flat["base"] = "blank"
         style = styles_by_name.get(sname)
         if style:
             rect2 = crop_rect(r)
@@ -380,6 +426,10 @@ def _grouped(data: dict, mode: str) -> list[tuple[str, str, list[str]]]:
         if rule_mode(rule) != mode:
             continue
         base = (rule.get("base") or "").replace("\\", "/")
+        # base: "blank" 은 경로가 아니라 **공통 판이 없다**는 표시다 — 멤버마다
+        # 투명 캔버스에 글자만 굽는다. 판을 찾는 쪽에는 빈 값으로 보인다.
+        if base == "blank":
+            base = ""
         members = [str(m).replace("\\", "/") for m in (rule.get("members") or [])]
         out.append((name, base, members))
     return out

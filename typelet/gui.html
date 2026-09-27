@@ -80,6 +80,11 @@
   #props table { width: 100%; border-collapse: collapse; }
   #props td { padding: 2px 4px; vertical-align: top; word-break: break-all; }
   #props td.k { color: var(--dim); width: 118px; }
+  /* 상자 목록은 키-값 표가 아니라 여러 칸짜리라 118px 균등 폭을 쓰면 안 된다.
+     앞 칸들은 내용만큼만, 남는 폭은 마지막 칸(번역)이 먹는다. */
+  #props table.boxlist td { width: auto; white-space: nowrap; }
+  #props table.boxlist td:first-child { width: 18px; padding-right: 0; }
+  #props table.boxlist td:last-child { width: 100%; white-space: normal; }
   #props .empty { color: var(--dim); padding: 20px 6px; }
   .zoom { margin-left: auto; display: flex; gap: 4px; }
   .zoom button { background: none; border: 1px solid var(--line);
@@ -133,12 +138,33 @@ function el(tag, cls, text) {
   if (text !== undefined) node.textContent = text;
   return node;
 }
-// 텍스트 1개 파일의 미리보기 축약: 전각공백 제거, 한글 5자 넘으면 …
+// 인라인 색 표시를 뗀다 — 목록 미리보기는 글자만 보여야 읽힌다.
+//   [#RRGGBB] [##RRGGBB] [###RRGGBB] [#앞색##뒤색] [/]
+const INLINE_TAG = /\[(?:\/|(?:#{1,3}[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?)+)\]/g;
+function stripInline(t) {
+  return (t || "").replace(INLINE_TAG, "");
+}
+// 미리보기 축약: 인라인 표시·전각공백 제거, 한글 5자 넘으면 …
 function abbrev(t) {
-  const s = (t || "").replace(/　/g, "").trim();
+  const s = stripInline(t).replace(/　/g, "").trim();
   const c = [...s];
   return c.length > 5 ? c.slice(0, 5).join("") + "…" : s;
 }
+// 목록에 쓸 짧은 파일 이름 — 뒤에 붙은 (세그먼트-번호)를 (...) 로 줄인다.
+//   library/name-001-(087f08000-001).png  ->  name-001-(...).png
+function shortName(path) {
+  return (path || "").split("/").pop().replace(/-\([^)]*\)/, "-(...)");
+}
+// 상자 목록에 쓸 짧은 id — 묶음 접두(catalog:)와 (세그먼트-번호)를 뗀다.
+//   message-112x17:112x17-008-(085399800-033)  ->  112x17-008
+// 한 파일의 목록이라 뗀 부분은 모든 줄이 같다. 전체 id 는 title 에 남긴다.
+function shortBoxId(id) {
+  return (id || "").split(":").pop().replace(/-\([^)]*\)/, "") || id;
+}
+// 트리에서 접기/펴기 상태 — 이름별 true/false. 없으면 기본값을 쓴다.
+let treeOpen = {group: {}, cat: {}};
+// 파일별 미리보기로 쓸 행 id — 행이 여럿인 파일에서 고른다.
+let previewPick = {};
 
 async function loadTree() {
   const tree = await (await fetch("/api/tree")).json();
@@ -194,14 +220,24 @@ async function loadTree() {
     const body = el("div");
     const active = g.name === currentGroup;
     if (active) group.classList.add("active");
-    body.style.display = active ? "" : "none";
-    group.onclick = () =>
-      body.style.display = body.style.display === "none" ? "" : "none";
+    const open = g.name in treeOpen.group ? treeOpen.group[g.name] : active;
+    body.style.display = open ? "" : "none";
+    group.onclick = () => {
+      const shut = body.style.display === "none";
+      body.style.display = shut ? "" : "none";
+      treeOpen.group[g.name] = shut;
+      saveState();
+    };
     for (const f of g.files) {
-      const item = el("div", "item", f.file.split("/").pop() + " ");
-      if (f.rows === 1 && f.text)
-        item.appendChild(el("span", "preview", abbrev(f.text)));
-      else if (f.rows > 0)
+      const item = el("div", "item", shortName(f.file) + " ");
+      const texts = f.texts || (f.text ? [{id: "", ko: f.text}] : []);
+      const pickId = previewPick[f.file];
+      const shown = texts.find(x => x.id === pickId) || texts[0];
+      if (shown)
+        item.appendChild(el("span", "preview", abbrev(shown.ko)));
+      if (f.rows > 1)
+        item.appendChild(document.createTextNode(` (${f.rows})`));
+      else if (!shown && f.rows > 0)
         item.appendChild(document.createTextNode(`(${f.rows})`));
       item.dataset.file = f.file;
       item.dataset.group = g.name;    // 공유 base 가 어느 그룹으로 열릴지
@@ -231,21 +267,33 @@ async function loadTree() {
     folder.appendChild(el("span", "n", `(${byCat[c].length})`));
     const fbody = el("div", "fbody");
     let anyActive = false;
-    for (const g of byCat[c]) if (renderGroup(g, fbody)) anyActive = true;
-    fbody.style.display = anyActive ? "" : "none";
-    folder.onclick = () =>
-      fbody.style.display = fbody.style.display === "none" ? "" : "none";
+    // 폴더 안은 이름순 — 숫자는 자릿수가 아니라 값으로 (186x48 < 205x51).
+    // 폴더 밖(최상위)은 원장에 적은 순서를 그대로 둔다.
+    const inCat = [...byCat[c]].sort(
+      (a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+    for (const g of inCat) if (renderGroup(g, fbody)) anyActive = true;
+    const open = c in treeOpen.cat ? treeOpen.cat[c] : anyActive;
+    fbody.style.display = open ? "" : "none";
+    folder.onclick = () => {
+      const shut = fbody.style.display === "none";
+      fbody.style.display = shut ? "" : "none";
+      treeOpen.cat[c] = shut;
+      saveState();
+    };
     nav.appendChild(folder);
     nav.appendChild(fbody);
   }
   if (tree.files.length) nav.appendChild(el("div", "sect", "파일 (행)"));
   for (const f of tree.files) {
-    const item = el("div", "item", f.file + " ");
-    if (f.rows === 1 && f.text)
-      item.appendChild(el("span", "preview", abbrev(f.text)));
-    else
-      item.appendChild(f.rows === 0 ? el("span", "undecided", "미정")
-                                    : document.createTextNode(`(${f.rows})`));
+    const item = el("div", "item", shortName(f.file) + " ");
+    item.title = f.file;
+    const texts = f.texts || (f.text ? [{id: "", ko: f.text}] : []);
+    const shown = texts.find(x => x.id === previewPick[f.file]) || texts[0];
+    if (shown) item.appendChild(el("span", "preview", abbrev(shown.ko)));
+    if (f.rows === 0)
+      item.appendChild(el("span", "undecided", "미정"));
+    else if (f.rows > 1 || !shown)
+      item.appendChild(document.createTextNode(` (${f.rows})`));
     item.dataset.file = f.file;
     item.style.paddingLeft = "12px";
     item.onclick = () => openFile(f.file, item);
@@ -305,7 +353,9 @@ async function openFile(file, item, group) {
   document.querySelectorAll("#tree .item.sel")
     .forEach(n => n.classList.remove("sel"));
   if (item) item.classList.add("sel");
-  if (detail && detail.file !== file) styleEdits = {};   // 파일 바뀌면 편집 폐기
+  if (detail && detail.file !== file) {                  // 파일 바뀌면 편집 폐기
+    styleEdits = {}; styleScopePick = {};
+  }
   currentGroup = group || null;        // 공유 base 를 어느 그룹으로 열지 기억
   renderEpoch++;                       // 이미지 URL 버전 — 메모리 캐시 무효화
   detail = await (await fetch("/api/file?path=" + encodeURIComponent(file) +
@@ -590,6 +640,8 @@ function select(id) { selected = id; renderStage(); renderProps(); }
 
 // ---- 스타일 인라인 편집 (변경 즉시 미리보기, 저장 버튼으로 원장 기록) ----
 let styleEdits = {};            // {스타일명: {키: 입력 문자열}} — 저장 전
+let styleScopePick = {};        // {box_id: "group"|"entry"} — 스타일 적용 범위
+                                // (renderProps 가 패널을 다시 그려도 유지)
 let stylePreviewTimer = null;
 let renderEpoch = 0;            // 이미지 URL 버전 (openFile 마다 증가)
 
@@ -624,7 +676,8 @@ const OPTIONAL_STYLE_FIELDS = [
   ["offset_x",          "가로 이동 px"],
   ["offset_y",          "세로 이동 px"],
   ["distribute",        "상자 폭 균등 분배 (true/false)"],
-  ["squeeze_min",       "가로 압축 하한 0~1"],
+  ["overflow",          "넘칠 때 줄이는 수단 하나 — font-resize(글자 크기) · reduce-spacing(자간) · squeeze(가로 압축). 행에 적은 값이 우선"],
+  ["squeeze_min",       "가로 압축 하한 0~1 (font-resize 의 크기 하한으로도 쓰인다, 기본 0.5)"],
   ["crop_size",         "[w,h] — crop 크기 (행 crop 은 [x,y]만 둘 때)"],
   ["pad",               '안쪽 여백 px — 8 · "8,2"(좌우,상하) · "l,t,r,b" · {"l":8,"t":0,"r":0,"b":0}'],
   ["base",              "상속할 스타일명"],
@@ -1165,22 +1218,43 @@ function renderBoxList(pane) {
   renderPost(pane);
   // 파일 선택 직후 — crop/text 상자 목록. 항목 클릭 = 상자 선택
   pane.appendChild(el("h3", "", `상자 목록 (${detail.rows.length}행)`));
-  const t = el("table");
+  const t = el("table", "boxlist");
   const head = el("tr");
-  for (const h of ["id", "원문 jp", "번역 ko"]) {
+  for (const h of ["", "id", "원문 jp", "번역 ko"]) {
     head.appendChild(el("td", "k", h));
   }
   t.appendChild(head);
+  const many = detail.rows.length > 1;
+  const picked = previewPick[detail.file];
   for (const row of detail.rows) {
     const tr = el("tr");
     tr.style.cursor = "pointer";
     tr.onmouseenter = () => tr.style.background = "#262a33";
     tr.onmouseleave = () => tr.style.background = "";
     tr.onclick = () => select(row.box_id);
+    // 행이 여럿이면 어느 것을 왼쪽 목록 미리보기로 쓸지 고른다
+    const pin = el("td", "");
+    if (many) {
+      const on = picked ? picked === row.box_id : row === detail.rows[0];
+      const b = el("span", "", on ? "◉" : "○");
+      b.title = "왼쪽 목록에 이 줄을 표시";
+      b.style.cursor = "pointer";
+      b.style.color = on ? "var(--accent)" : "#6b7280";
+      b.onclick = (ev) => {
+        ev.stopPropagation();
+        previewPick[detail.file] = row.box_id;
+        saveState();
+        loadTree();
+        renderProps();
+      };
+      pin.appendChild(b);
+    }
+    tr.appendChild(pin);
     const ko = row.ko_text || (row._problem ? "⚠" + row._problem : "");
-    const cells = [row.box_id, row.jp_text || "—", ko];
+    const cells = [shortBoxId(row.box_id), row.jp_text || "—", ko];
     cells.forEach((value, index) => {
       const td = el("td", "", value);
+      if (index === 0) td.title = row.box_id;   // 줄인 id — 전체는 여기에
       if (index === 2 && row._problem) td.style.color = "#ff8a7a";
       if (index === 2 && !row._problem) td.style.color = "var(--accent)";
       tr.appendChild(td);
@@ -1277,15 +1351,38 @@ function renderProps() {
   sel.onfocus = expand;
   sel.onblur = collapse;
   sel.value = row.style || "";
+  // text-only 묶음은 스타일을 묶음이 든다 — 한 항목만 다른 경우를 위해
+  // 적용 범위를 고른다. 이미 항목별 지정이 있으면 그쪽으로 열어 준다.
+  const styleScope = styleScopePick[selected]
+    || ((isCatalogRow && detail.entry && detail.entry.style) ? "entry" : "group");
   sel.onchange = async () => {
     collapse();
     const id = selected;
     busy("스타일 지정 변경 중…");
     finishOp(await postOp("/api/box/style?path=" +
       encodeURIComponent(detail.file) + "&id=" + encodeURIComponent(id),
-      {style: sel.value}), id);
+      {style: sel.value, scope: styleScope}), id);
   };
   styleRow.appendChild(sel);
+  if (isCatalogRow) {
+    const scopeWrap = el("div");
+    scopeWrap.style.cssText = "display:flex;flex:none;border:1px solid " +
+      "var(--line);white-space:nowrap";
+    const cname = (detail.catalog && detail.catalog.name) || "묶음";
+    const mk = (val, text, tip) => {
+      const b = el("button", "", text);
+      b.title = tip;
+      b.style.cssText =
+        "background:" + (styleScope === val ? "var(--accent)" : "none") +
+        ";border:none;color:" + (styleScope === val ? "#0b0e13" : "var(--dim)") +
+        ";padding:2px 8px;cursor:pointer;font:inherit";
+      b.onclick = () => { styleScopePick[selected] = val; renderProps(); };
+      return b;
+    };
+    scopeWrap.appendChild(mk("group", "묶음 공통", cname + " 전체에 적용"));
+    scopeWrap.appendChild(mk("entry", "이 항목만", "이 항목에만 얹는다"));
+    styleRow.appendChild(scopeWrap);
+  }
   // ＋ 새 스타일 추가
   const addStyleBtn = el("button", "", "＋새 스타일");
   addStyleBtn.style.cssText = "background:none;border:1px solid var(--line);" +
@@ -1717,6 +1814,7 @@ function saveState() {
     localStorage.setItem(STORE_KEY, JSON.stringify({
       base, overlays, compare, overlayAlpha, zoom, bgIndex, bgCustom,
       file: detail ? detail.file : null,
+      treeOpen, previewPick,
     }));
   } catch (e) { /* localStorage 불가 환경 — 상태 유지만 포기 */ }
 }
@@ -1736,6 +1834,12 @@ function restoreState() {
     if (Number.isInteger(s.bgIndex) && s.bgIndex >= 0 && s.bgIndex <= 3)
       bgIndex = s.bgIndex;
     if (typeof s.bgCustom === "string") bgCustom = s.bgCustom;
+    if (s.treeOpen && typeof s.treeOpen === "object")
+      for (const k of ["group", "cat"])
+        if (s.treeOpen[k] && typeof s.treeOpen[k] === "object")
+          treeOpen[k] = s.treeOpen[k];
+    if (s.previewPick && typeof s.previewPick === "object")
+      previewPick = s.previewPick;
     return typeof s.file === "string" ? s.file : null;
   } catch (e) {
     return null;

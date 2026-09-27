@@ -62,6 +62,8 @@ SHADOW_RE = re.compile(
     r"(?:,color=(#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?))?\)"   # #RRGGBB 또는 RRGGBBAA
 )
 ROTATE_RE = re.compile(r"rotate\(angle=(-?[0-9.]+)\)")
+# overflow 에 적을 수 있는 수단 — 적은 **순서대로** 써서 상자 안에 넣는다.
+OVERFLOW_WAYS = ("font-resize", "reduce-spacing", "squeeze")
 
 
 def sha256(data: bytes) -> str:
@@ -111,6 +113,7 @@ class RowSpec:
     matte: tuple | None = None              # 배경색RGB(1색) — 스타일 matte
     matte_th: int | None = None             # matte 테두리 임계값 — 알파 급변 가장자리를 matte색으로
     matte_hard: bool = False                # matte 깐 자리를 알파 255 로 굳힘 (1비트 알파용)
+    spans: tuple = ()                       # 인라인 색 — ((시작, 끝, RGBA), …)
 
 
 def parse_box(row: dict[str, str], prefix: str, box_id: str,
@@ -138,6 +141,69 @@ def parse_color(value: str, alpha: int, field: str, box_id: str
             f"{box_id}: {field}는 #RRGGBB 또는 #RRGGBBAA 형식이어야 합니다: {value!r}")
     r, g, b = (int(value[i:i + 2], 16) for i in (1, 3, 5))
     return r, g, b, alpha
+
+
+_HEX = r"[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?"
+INLINE_RE = re.compile(
+    rf"\[(?:(/)|(###{_HEX})|(##{_HEX})|(#{_HEX})(##{_HEX})?)\]")
+
+
+def parse_inline(text: str, base_fill: tuple, box_id: str
+                 ) -> tuple[str, tuple]:
+    """번역문의 인라인 색 표시를 떼어 (민글자, 색 구간들) 로.
+
+        브레이크 레버를 [#F55C1B]'유지' 왼쪽 끝[/]에 맞추고,
+
+      [#RRGGBB]        글자색
+      [##RRGGBB]       글자 둘레색 — 스타일 shadow 의 색을 이 구간만 갈아
+                       끼운다. shadow 가 없고 outline 만 있는 스타일이면
+                       outline 색을 갈아 끼운다
+      [#글자색##그림자색] 둘 다
+      [###RRGGBB]      글자와 그림자를 같은 색으로
+      [/]              바로 앞 것을 닫는다 (안 닫으면 줄 끝까지)
+
+    뒤에 AA 두 자리를 더 붙이면 알파다. 구간은 겹치지 않는다.
+
+    **색만** 바꾼다 — 글꼴·크기·자간은 그대로라 글자 자리가 안 움직인다.
+    그래서 자리잡기(폭 재기·정렬·압축)는 민글자 하나로 예전과 똑같이 하고,
+    그릴 때만 구간별로 색을 갈아 끼운다.
+    """
+    if "[" not in text:
+        return text, ()
+
+    def color(tok):
+        tok = "#" + tok.lstrip("#")
+        return parse_rgba8(tok if len(tok) == 9 else tok + "FF", box_id)
+
+    out: list[str] = []
+    spans: list[tuple[int, int, tuple | None, tuple | None]] = []
+    open_at: int | None = None
+    open_fg: tuple | None = None
+    open_bg: tuple | None = None
+    pos = 0
+    for m in INLINE_RE.finditer(text):
+        out.append(text[pos:m.start()])
+        pos = m.end()
+        close, both, bg_only, fg, bg = m.groups()
+        here = sum(len(p) for p in out)
+        if open_at is not None and here > open_at:
+            spans.append((open_at, here, open_fg, open_bg))
+        if close:
+            if open_at is None:
+                raise ValueError(f"{box_id}: 열지 않은 [/] 입니다: {text!r}")
+            open_at, open_fg, open_bg = None, None, None
+            continue
+        if both:
+            open_fg = open_bg = color(both)
+        else:
+            open_fg = color(fg) if fg else None
+            open_bg = color(bg_only or bg) if (bg_only or bg) else None
+        open_at = here
+    out.append(text[pos:])
+    plain = "".join(out)
+    if open_at is not None and len(plain) > open_at:
+        spans.append((open_at, len(plain), open_fg, open_bg))
+    return plain, tuple(spans)
 
 
 def parse_rgba8(value: str, box_id: str) -> tuple[int, int, int, int]:
@@ -203,6 +269,31 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
 
     effect = (style.get("effect") or "").strip()
 
+    # 그림자 — 스타일 키 `shadow` = "dx dy [blur] [#RRGGBB(AA)]" (CSS box-shadow
+    # 식, 공백 구분·뒤 2자리=알파). 색을 생략하면 outline 색을 쓴다(기존 규약).
+    # 내부적으로는 기존 effect 문자열로 합성해 렌더 경로를 그대로 탄다.
+    # effect 키는 backward compatibility 로만 남는다.
+    shadow_s = str(style.get("shadow") or "").strip()
+    if shadow_s:
+        if effect:
+            raise ValueError(f"{box_id}: effect 와 shadow 는 같이 쓸 수 없습니다")
+        color = ""
+        nums = []
+        for tok in shadow_s.split():
+            if tok.startswith("#"):
+                color = tok
+            else:
+                nums.append(tok)
+        if not 2 <= len(nums) <= 3:
+            raise ValueError(
+                f"{box_id}: shadow 는 'dx dy [blur] [#RRGGBB(AA)]' 입니다: {shadow_s!r}")
+        if color and not re.fullmatch(r"#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?", color):
+            raise ValueError(
+                f"{box_id}: shadow 색은 #RRGGBB 또는 #RRGGBBAA 입니다: {color!r}")
+        effect = (f"drop_shadow(dx={int(nums[0])},dy={int(nums[1])},"
+                  f"blur={float(nums[2]) if len(nums) > 2 else 0.0}"
+                  + (f",color={color}" if color else "") + ")")
+
     box = parse_box(row, "text_", box_id)
     if box is None:
         raise SkipRow(f"{box_id}: text 상자가 없습니다")
@@ -262,9 +353,16 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
             f"{box_id}: italic 과 outline 동시 사용은 아직 지원하지 않습니다"
         )
 
-    overflow = (row.get("overflow") or "").strip()
-    if overflow not in ("", "squeeze"):
-        raise ValueError(f"{box_id}: 지원하지 않는 overflow {overflow!r}")
+    # overflow — 넘칠 때 줄이는 수단 **하나**를 고른다(빈 값이면 안 줄인다).
+    # 무엇을 줄이든 pad 를 먹인 뒤의 text 상자 안으로만 맞춘다 — 여백은 고정이다.
+    #   font-resize     글자 크기를 낮춘다 (하한 = squeeze_min 배, 기본 0.5)
+    #   reduce-spacing  자간(tracking)을 덜어낸다 (0 밑으로는 안 붙인다)
+    #   squeeze         가로만 눌러 담는다 (하한 = squeeze_min)
+    # 행 > 스타일 — 무리가 통째로 같은 규칙을 쓰면 스타일에 한 번만 적는다.
+    overflow = (row.get("overflow") or style.get("overflow") or "").strip()
+    if overflow and overflow not in OVERFLOW_WAYS:
+        raise ValueError(f"{box_id}: 지원하지 않는 overflow {overflow!r} — "
+                         f"{' · '.join(OVERFLOW_WAYS)} 중 하나를 고른다")
     if overflow and (vertical or distribute):
         raise ValueError(
             f"{box_id}: overflow 는 세로쓰기/균등분배와 함께 쓸 수 없습니다"
@@ -326,12 +424,15 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
     if matte_hard and matte is None:
         raise ValueError(f"{box_id}: matte_hard 를 쓰려면 matte_rgb 가 필요합니다")
 
+    # 인라인 색은 글자 자리를 안 바꾸므로, 여기서 떼어 민글자만 아래로 보낸다
+    plain_text, spans = parse_inline(row["ko_text"], fill, box_id)
+
     return RowSpec(
         box_id=box_id,
         file=row["file"],
         run_id=(row.get("run_id") or "").strip(),
         # 앞뒤 공백 보존 — run 구분자(' / ') 같은 멤버는 공백이 곧 내용이다.
-        text=row["ko_text"],
+        text=plain_text,
         box=box,
         crop=crop,
         align=align,
@@ -355,6 +456,7 @@ def resolve(row: dict[str, str], styles: dict[str, dict]) -> RowSpec:
         matte=matte,
         matte_th=matte_th,
         matte_hard=matte_hard,
+        spans=spans,
     )
 
 
@@ -505,12 +607,72 @@ def stamp(layer: Image.Image, mask: Image.Image,
     layer.alpha_composite(tint)
 
 
+def color_runs(spec: RowSpec, font: ImageFont.FreeTypeFont):
+    """인라인 색 구간을 (토막글자, 펜 밀기 px, 글자색, 배경색) 으로 쪼갠다.
+
+    민글자로 이미 자리를 다 잡아 둔 뒤라, 토막의 시작 위치는 앞 글자들의
+    펜 전진폭이면 된다 — draw_text 가 글자마다 (폭 + 자간) 씩 미는 것과
+    같은 셈법을 쓴다.
+    """
+    cuts = sorted({0, len(spec.text)}
+                  | {i for s, e, *_ in spec.spans for i in (s, e)})
+    for a, b in zip(cuts, cuts[1:]):
+        if a >= b:
+            continue
+        hit = next(((f, g) for s, e, f, g in spec.spans if s <= a and b <= e),
+                   (None, None))
+        head = spec.text[:a]
+        dx = _PROBE.textlength(head, font=font) + spec.tracking * len(head)
+        # 글자색은 **인라인으로 준 것만** 돌려준다 (None = 스타일 그대로).
+        # 그림자 색을 갈아 끼울지 판단하려면 둘을 구분해야 한다.
+        yield spec.text[a:b], dx, hit[0], hit[1]
+
+
+def span_rects(spec: RowSpec, font: ImageFont.FreeTypeFont, position,
+               grow: int = 0):
+    """구간마다 (사각형, 글자색, 배경색) — 높이는 글꼴 메트릭으로 잡는다.
+
+    글자 잉크로 잡으면 같은 구간이라도 글자에 따라 띠 높이가 들쭉날쭉해진다.
+    """
+    top, bottom = metric_bounds(font, spec.outline_w)
+    x0, baseline = position
+    for text, dx, fg, bg in color_runs(spec, font):
+        w = _PROBE.textlength(text, font=font) + spec.tracking * len(text)
+        yield ([round(x0 + dx) - grow, round(baseline + top) - grow,
+                round(x0 + dx + w) - 1 + grow,
+                round(baseline + bottom) - 1 + grow], fg, bg)
+
+
+def shadow_reach(spec: RowSpec) -> int:
+    """그림자가 글자 밖으로 번지는 최대 거리 (px)."""
+    reach = 0
+    for m in SHADOW_RE.finditer(spec.effect):
+        reach = max(reach, abs(int(m.group(1))) + int(float(m.group(3))) + 1,
+                    abs(int(m.group(2))) + int(float(m.group(3))) + 1)
+    return reach
+
+
 def draw_plain(
     layer: Image.Image,
     position: tuple[float, float],
     spec: RowSpec,
     font: ImageFont.FreeTypeFont,
 ) -> None:
+    if spec.spans:
+        # 색만 다른 토막들 — 자리는 민글자로 이미 잡혔으니 그리기만 나눈다.
+        from dataclasses import replace
+        # [##색] 은 글자 둘레의 어두운 색을 갈아 끼우는 표시다. 그 자리를
+        # shadow 로 내는 스타일이면 draw_effected 가 맡고, outline 으로
+        # 내는 스타일이면 여기서 맡는다 — 안 그러면 갈 곳이 없어 말없이
+        # 버려진다 (스타일의 테두리색이 그대로 나온다).
+        outline_takes_bg = not SHADOW_RE.search(spec.effect) and spec.outline_w
+        x, y = position
+        for text, dx, fill, bg in color_runs(spec, font):
+            over = {"outline": bg} if (bg and outline_takes_bg) else {}
+            draw_plain(layer, (x + dx, y),
+                       replace(spec, text=text, fill=fill or spec.fill,
+                               spans=(), **over), font)
+        return
     if spec.slant or (spec.fill[3] < 255 and not spec.outline_w):
         # 반투명 fill 은 stamp 로 확실히 알파 합성 — 뒤 무늬가 비친다.
         stamp(layer, text_mask(layer.size, position, spec, font), spec.fill)
@@ -851,15 +1013,63 @@ def draw_effected(layer: Image.Image, position, spec: RowSpec,
     보통 위-왼쪽 어두운 그림자 + 아래-오른쪽 밝은 하이라이트 2겹이다."""
     shadows = list(SHADOW_RE.finditer(spec.effect))
     if shadows:
-        for m in shadows:
-            dx, dy = int(m.group(1)), int(m.group(2))
-            blur = float(m.group(3))
-            color = (parse_rgba8(m.group(4), spec.box_id)
-                     if m.group(4) else spec.outline)
-            draw_shadow(layer, position, spec, font, dx, dy, blur, color)
+        def pass_on(dst, over=None):
+            """그림자 겹들을 dst 에 깐다. over 가 있으면 그 색으로 갈아 끼운다."""
+            for m in shadows:
+                color = over or (parse_rgba8(m.group(4), spec.box_id)
+                                 if m.group(4) else spec.outline)
+                draw_shadow(dst, position, spec, font, int(m.group(1)),
+                            int(m.group(2)), float(m.group(3)), color)
+
+        # [##색] 을 준 구간은 스타일의 shadow 색을 그 색으로 갈아 끼운다.
+        tinted = [(r, bg) for r, _fg, bg in
+                  span_rects(spec, font, position, grow=shadow_reach(spec)) if bg]
+        if not tinted:
+            pass_on(layer)
+        else:
+            base = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+            pass_on(base)
+            for rect, fg in tinted:
+                one = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+                pass_on(one, over=fg)
+                box = (max(0, rect[0]), max(0, rect[1]),
+                       min(layer.width, rect[2] + 1),
+                       min(layer.height, rect[3] + 1))
+                if box[0] < box[2] and box[1] < box[3]:
+                    base.paste(one.crop(box), box)
+            layer.alpha_composite(base)
     elif spec.effect not in PLAIN_EFFECTS:
         raise ValueError(f"{spec.box_id}: 지원하지 않는 effect {spec.effect!r}")
     draw_plain(layer, position, spec, font)
+
+
+def fit_to_box(spec: RowSpec, fonts: FontCache, font, adv: float):
+    """넘치면 overflow 로 고른 수단 하나로 줄여 상자 폭 안에 넣는다.
+
+    상자(spec.box)는 pad 를 이미 먹인 text 상자다 — 여기서 무엇을 줄이든
+    **여백은 그대로**이고, 줄인 뒤에도 그 안을 넘지 않는다.
+
+    'squeeze' 는 그리는 단계(draw_squeezed)에서 처리하므로 여기선 지나친다.
+    반환: (spec, font, adv) — 줄이고 난 뒤의 것.
+    """
+    from dataclasses import replace
+
+    bw = spec.box[2]
+    if adv <= bw:
+        return spec, font, adv
+    if spec.overflow == "reduce-spacing" and spec.tracking > 0:
+        # 자간으로 벌어진 만큼만 덜어낸다 — 0 밑으로 당겨 붙이지는 않는다.
+        gaps = max(len(spec.text) - 1, 1)
+        spec = replace(spec, tracking=max(0.0, spec.tracking - (adv - bw) / gaps))
+        adv = advance(spec.text, font, spec.tracking)
+    elif spec.overflow == "font-resize":
+        # squeeze_min 을 크기 하한으로도 쓴다(없으면 0.5). 한 칸씩 낮춘다.
+        floor = max(1, int(spec.size * (spec.squeeze_min or 0.5)))
+        while spec.size > floor and adv > bw:
+            spec = replace(spec, size=spec.size - 1)
+            font = fonts.get(spec)
+            adv = advance(spec.text, font, spec.tracking)
+    return spec, font, adv
 
 
 def draw_squeezed(layer: Image.Image, spec: RowSpec, font,
@@ -925,11 +1135,20 @@ def draw_multiline(layer: Image.Image, spec: RowSpec,
         y0 = by + bh - block
     else:
         y0 = by + (bh - block) / 2
+    start = 0
     for i, line in enumerate(lines):
         adv = advance(line, font, spec.tracking)
         sub = (bx, round(y0 + i * pitch), bw, pitch)   # 이 줄의 슬롯
         position = pen_and_baseline(sub, (h, "m"), adv, top, bottom)
-        draw_effected(layer, position, replace(spec, text=line), font)
+        # 인라인 색 구간은 통글자 기준 자리라, 이 줄 몫만 잘라 0 부터로 옮긴다
+        end = start + len(line)
+        spans = tuple((max(s, start) - start, min(e, end) - start, f, g)
+                      for s, e, f, g in spec.spans
+                      if s < end and e > start)
+        draw_effected(layer, position,
+                      replace(spec, text=line, spans=spans), font)
+        start = end + 1                                # 줄바꿈 한 글자
+
 
 
 def render_single(layer: Image.Image, spec: RowSpec,
@@ -969,6 +1188,10 @@ def render_single(layer: Image.Image, spec: RowSpec,
             raise ValueError(f"{spec.box_id}: rotate 와 overflow 는 같이 못 쓴다")
         draw_rotated(layer, spec, font, float(rotate_match.group(1)))
         return
+    if spec.overflow and adv > spec.box[2]:
+        # 고른 수단으로 줄여 본다 — 크기를 낮췄으면 글꼴이 바뀌니 metric 도 다시.
+        spec, font, adv = fit_to_box(spec, fonts, font, adv)
+        top, bottom = metric_bounds(font, spec.outline_w)
     if spec.overflow == "squeeze" and adv > spec.box[2]:
         draw_squeezed(layer, spec, font, adv, top, bottom)
         return

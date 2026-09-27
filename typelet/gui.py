@@ -33,6 +33,11 @@ IMAGE_ROOTS = {
 
 
 def _safe_join(root: Path, relative: str) -> Path | None:
+    # 빈 상대경로는 파일이 아니다 — 그대로 이으면 루트 **디렉터리**가 나오고,
+    # exists() 가 참이라 호출부가 그걸 그림으로 열다 PermissionError 를 낸다.
+    # base 가 없는 무리(same-pattern base: "blank")에서 실제로 그랬다.
+    if not relative.strip():
+        return None
     candidate = (root / Path(*relative.split("/"))).resolve()
     if root.resolve() != candidate and root.resolve() not in candidate.parents:
         return None
@@ -52,11 +57,16 @@ def build_tree(project: Project) -> dict:
         catalogs.append({"name": cat["name"], "dir": cat.get("dir", ""),
                          "count": len(entries), "entries": entries})
     by_file: dict[str, int] = {}
-    ko_first: dict[str, str] = {}   # 파일별 첫 행 ko (텍스트 1개일 때 미리보기용)
+    # 파일별 (행 id, ko) 목록 — 트리 미리보기용. 행이 여럿인 파일은 어느 것을
+    # 보일지 화면에서 고른다(고른 값은 브라우저에 남는다).
+    ko_rows: dict[str, list] = {}
     for row in ledgermod.rows(data):
         f = row["file"]
         by_file[f] = by_file.get(f, 0) + 1
-        ko_first.setdefault(f, (row.get("ko") or row.get("ko_text") or "").strip())
+        ko = (row.get("ko") or row.get("ko_text") or "").strip()
+        if ko:
+            ko_rows.setdefault(f, []).append(
+                {"id": row.get("box_id", ""), "ko": ko})
     # 규칙(set) 경로 기준 그룹핑 — roadguidesign 434판 같은 무리가 트리에서
     # 접히는 그룹으로 보이게 (데이터 모델은 행 그대로, 표시만 묶는다)
     rules_map = data.get("rules", {})
@@ -106,8 +116,9 @@ def build_tree(project: Project) -> dict:
         # no-text 그룹은 텍스트가 없어 "완성" 판정을 erased(clean 판) 존재로 한다.
         entry = {"file": relative, "rows": count,
                  "erased": (project.base_root / relative).exists()}
-        if count == 1:                               # 텍스트 1개 → 미리보기 축약용
-            entry["text"] = ko_first.get(relative, "")
+        if ko_rows.get(relative):                    # 미리보기 후보(행별 ko)
+            entry["texts"] = ko_rows[relative]
+            entry["text"] = ko_rows[relative][0]["ko"]      # 구버전 화면 대비
         gnames = member_to_groups.get(relative)
         if gnames:                                  # 논리 그룹 멤버/베이스
             for gname in gnames:
@@ -914,18 +925,60 @@ def box_sync(project: Project, relative: str, scope: str = "file") -> str:
 
 
 def box_set_style(project: Project, relative: str, box_id: str,
-                  style_name: str) -> str:
+                  style_name: str, scope: str = "group") -> str:
     """행의 스타일 지정 변경 (GUI 드롭다운). 빈 문자열 = 지정 해제.
 
-    text-only 항목이면 entry 에 override 로 얹힌다 (묶음 기본은 그대로)."""
+    scope="entry" 면 공유하지 않고 **이 항목에만** 얹는다 (text-only 전용).
+
+    같은 틀 무리(same-pattern)면 스타일도 그룹이 공유한다 — 상자를 공유 slot
+    에 쓰는 것과 같이, 규칙의 style 을 고치고 행별 지정은 걷어낸다.
+    text-only 항목이면 묶음(카탈로그)의 style 을 고친다 — 같은 크기·같은
+    생김새라서 한 묶음인 것이니 스타일도 묶음이 든다."""
     style_name = (style_name or "").strip()
     data = ledgermod.load(project)
+    rules_map = data.get("rules", {})
     if style_name and style_name not in {s["name"] for s in data.get("styles", [])}:
         raise ValueError(f"원장에 없는 스타일: {style_name!r}")
     for row in ledgermod.rows(data):
         # box_id 는 파일별 접두라 유니크 — file 로 좁히지 않는다. (overlay 그룹은
         # 여러 파일 행을 한 뷰에 모으므로 보고 있는 file 과 행의 file 이 다르다)
         if row.get("box_id") == box_id:
+            # 슬롯을 쓰는 행이면 스타일도 슬롯이 든다 — 상자와 같은 자리다.
+            # 라벨 스타일을 바꿨다고 눈금 양끝까지 따라가면 안 되므로 같은
+            # 슬롯을 참조하는 행들만 따라온다. (rows · same-pattern 공통)
+            slot = row.get("slot")
+            rule, spec = (ledgermod.slot_spec_for(data, row.get("file", ""), slot)
+                          if slot is not None else ({}, {}))
+            grp = ledgermod.logical_group_for(data, row.get("file", ""))
+            grule = rules_map.get(grp[0]) if grp else None
+            if spec:
+                rule["slots"][slot] = spec      # 구형 리스트면 dict 로 승격
+                target, scope = spec, f"슬롯 {slot}"
+            elif grule is not None and ledgermod.is_same_pattern(grule):
+                target, scope = grule, "그룹 전체"
+            else:
+                target = None
+            if target is not None:
+                if style_name:
+                    target["style"] = style_name
+                else:
+                    target.pop("style", None)
+                peers = (set(grp[2]) | {grp[1]}) if grp else None
+                for r2 in ledgermod.rows(data):
+                    if r2.get("slot") != slot:
+                        continue
+                    if peers is not None and r2.get("file") not in peers:
+                        continue
+                    if peers is None and r2.get("file") != row.get("file"):
+                        _, s2 = ledgermod.slot_spec_for(data, r2.get("file", ""),
+                                                        slot)
+                        if s2 is not spec:
+                            continue
+                    r2.pop("style", None)
+                ledgermod.save(project, data)
+                _INJECT_CACHE.clear()
+                return (f"{box_id}.style = {style_name or '(없음)'} "
+                        f"(공유 style — {scope})")
             row["style"] = style_name
             ledgermod.save(project, data)
             _INJECT_CACHE.pop(row.get("file"), None)
@@ -933,14 +986,38 @@ def box_set_style(project: Project, relative: str, box_id: str,
     for cat in ledgermod.catalogs(data):
         for fname, entry in (cat.get("entries") or {}).items():
             if f"{cat['name']}:{fname.split('.')[0]}" == box_id:
-                if style_name and style_name != cat.get("style"):
-                    entry["style"] = style_name
+                if scope == "entry":
+                    # 이 항목만 — 묶음 기본은 그대로 두고 위에 얹는다.
+                    # 묶음 기본과 같은 값이면 얹을 이유가 없으니 걷어낸다.
+                    if style_name and style_name != cat.get("style"):
+                        entry["style"] = style_name
+                        how = f"이 항목만 (묶음 기본 {cat.get('style') or '(없음)'})"
+                    else:
+                        entry.pop("style", None)
+                        how = f"이 항목만 지정 해제 → 묶음 기본 {cat.get('style') or '(없음)'}"
+                    ledgermod.save(project, data)
+                    _INJECT_CACHE.pop(relative, None)
+                    return f"{box_id}.style = {style_name or '(없음)'} ({how})"
+                # 묶음의 스타일은 **묶음의 성질**이다 — 상자를 slot 이 들듯이
+                # 묶음이 든다. 한 항목에서 고치면 묶음 전체가 따라온다.
+                # (항목별 style 은 계속 읽는다 — 옛 원장 호환 · scope="entry")
+                if style_name:
+                    cat["style"] = style_name
                 else:
-                    entry.pop("style", None)   # 묶음 기본과 같으면 override 제거
+                    cat.pop("style", None)
+                # 묶음 기본과 같아진 항목별 지정만 걷어낸다 — **다른 값을
+                # 일부러 얹어 둔 항목은 그대로 둔다** (그게 override 의 뜻이다).
+                rows_ = (cat.get("entries") or {})
+                dropped = [v for v in rows_.values()
+                           if v.get("style") == style_name
+                           and v.pop("style", None) is not None]
+                kept = sum(1 for v in rows_.values() if v.get("style"))
                 ledgermod.save(project, data)
-                _INJECT_CACHE.pop(relative, None)
-                return f"{box_id}.style = {style_name or cat.get('style', '')}" \
-                       + ("" if style_name != cat.get("style") else " (묶음 기본)")
+                _INJECT_CACHE.clear()
+                return (f"{box_id}.style = {style_name or '(없음)'} "
+                        f"(묶음 {cat['name']} {len(rows_)}항목 공통)"
+                        + (f" · 중복 {len(dropped)}건 정리" if dropped else "")
+                        + (f" · 항목별 지정 {kept}건은 그대로" if kept else ""))
     raise ValueError(f"행을 찾지 못함: {box_id}")
 
 
@@ -1267,9 +1344,10 @@ def make_handler(project: Project, config_path: Path | None = None):
                 elif path == "/api/box/reread":
                     self._json({"log": box_reread(project, relative, box_id)})
                 elif path == "/api/box/style":
+                    body = self._body()
                     self._json({"log": box_set_style(
-                        project, relative, box_id,
-                        self._body().get("style", ""))})
+                        project, relative, box_id, body.get("style", ""),
+                        body.get("scope", "group"))})
                 elif path == "/api/box/ko":
                     self._json({"log": box_set_ko(
                         project, box_id, self._body().get("ko", ""))})
